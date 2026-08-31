@@ -103,28 +103,43 @@ if st.button("🚀 開始分析"):
                     # 3. 根據權限顯示不同深度的報告
                     # ==========================================
                     if st.session_state.role == "full":
-                        # --------- 【完整版】顯示邏輯 (對標 Excel 詳細內容) ---------
-                        col1, col2, col3, col4 = st.columns(4)
+                        # --------- 【完整版】戰情儀表板 (對標 Excel 摘要表) ---------
+                        
+                        # 1. 頂部數據看板
+                        col1, col2, col3, col4, col5 = st.columns(5)
                         col1.metric("機會分數", position["opportunity_score"])
                         col2.metric("魚頭分數", fish["fish_score"])
                         col3.metric("健康等級", fish["health_grade"])
-                        col4.metric("綜合撤退", retreat["retreat_score"])
+                        col4.metric("營收 YoY", f"{fundamental['yoy']}%")
+                        col5.metric("營收 MoM", f"{fundamental['mom']}%")
                         
-                        st.markdown(f"**大局狀態：** {position['candidate_status']} | **魚體位置：** {position['fish_position']}")
-                        st.markdown(f"**目前價：** {position['current_price']} | **實戰防守價：** {position['defensive_price']} ({position.get('defensive_status_text', '')})")
-                        st.markdown(f"**綜合風險提示：** 撤退 [{retreat['risk_status']}] | 預警 [{warning['warning_status']}]")
+                        st.markdown("---")
                         
+                        # 2. 狀態與評估區塊 (排版成左右兩列，對應 Excel 標題)
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.markdown(f"**🎯 大局狀態：** {position['candidate_status']}")
+                            st.markdown(f"**🐟 魚體位置：** {position['fish_position']}")
+                            st.markdown(f"**🛡️ 型態防禦：** {defense['defense_status']}")
+                            st.markdown(f"**🔋 續航狀態：** {endurance['endurance_status']}")
+                        with c2:
+                            st.markdown(f"**🏃 綜合撤退風險：** {retreat['risk_status']}")
+                            st.markdown(f"**⚠️ 綜合預警狀態：** {warning['warning_status']}")
+                            st.markdown(f"**🏢 基本面標籤：** {fundamental['fund_label']}")
+                            st.markdown(f"**💡 實戰評估(規則式)：** {position.get('strategy_profile', '無')}")
+                            
+                        # 3. 價格與防守區塊 (高亮顯示)
+                        st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` *(容忍: {position.get('max_tolerance', 8.0)}%)* ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
+                        
+                        # --------- 以下維持原本的 Tabs 分頁 ---------
                         # 使用 Tabs 來收納龐大的資訊，讓網頁看起來乾淨
                         tab1, tab2, tab3 = st.tabs(["核心與基本面", "防禦與籌碼雷達", "體檢與預警明細"])
                         
                         with tab1:
                             st.write(f"**保守目標區：** {position.get('target_low', '-')} ~ {position.get('target_high', '-')}")
                             st.write(f"**剩餘空間：** +{position.get('upside_low', '-')} ~ +{position.get('upside_high', '-')}")
-                            st.write(f"**營收基本面判定：** {fundamental['fund_label']}")
-                            st.write(f"**年增率(YoY)：** {fundamental['yoy']}% | **月增率(MoM)：** {fundamental['mom']}%")
                             st.markdown("**【系統解讀】**")
                             st.info(position.get('position_comment', '無'))
-                            st.info(position.get('strategy_profile', '無'))
                             
                         with tab2:
                             st.write(f"**【籌碼續航力】當前狀態：** {endurance['endurance_status']}")
