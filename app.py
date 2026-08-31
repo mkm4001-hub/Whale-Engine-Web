@@ -16,7 +16,7 @@ from whale_engines import *
 USERS = {
     "chiu": {"password": "gshock2500!", "role": "full"},
     "abs0401": {"password": "study01!", "role": "full"},
-    "other01": {"password": "55688!!!", "role": "full"},
+    "chi01": {"password": "miwatch9!", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
