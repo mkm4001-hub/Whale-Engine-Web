@@ -34,7 +34,7 @@ def log_query(username, stocks):
 # simple: 簡易報告 (無下載權限)
 USERS = {
     "chiu": {"password": "gshock2500!!", "role": "superuser"}, # 唯一擁有追蹤權限的帳號
-    "chi01": {"password": "Cc2468500!!", "role": "full"},      # 完整版帳號 1
+    "chi01": {"password": "cc2468500", "role": "full"},      # 完整版帳號 1
     "abs0401": {"password": "study01!", "role": "full"},      # 完整版帳號 2
     "user1": {"password": "123", "role": "simple"},     # 簡易版帳號 1
     "user2": {"password": "123", "role": "simple"}      # 簡易版帳號 2
