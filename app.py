@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import csv
 from datetime import datetime
 import pytz
 from FinMind.data import DataLoader
@@ -10,15 +11,33 @@ from FinMind.data import DataLoader
 from whale_engines import *
 
 # ==========================================
-# 1. 帳號密碼與權限分級系統
+# 0. 查詢紀錄功能 (將資料寫入 CSV 檔案)
 # ==========================================
-# 你可以在這裡設定帳號、密碼，以及他的權限 ('full' 代表完整版, 'simple' 代表簡易版)
+def log_query(username, stocks):
+    filename = "query_logs.csv"
+    file_exists = os.path.isfile(filename)
+    tz = pytz.timezone('Asia/Taipei')
+    now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 寫入 CSV，使用 utf-8-sig 確保 Excel 打開不會亂碼
+    with open(filename, mode='a', newline='', encoding='utf-8-sig') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["查詢時間", "登入帳號", "查詢股號"]) # 建立標題列
+        writer.writerow([now, username, stocks])
+
+# ==========================================
+# 1. 帳號密碼與權限分級系統 (三層架構)
+# ==========================================
+# superuser: 完整報告 + 下載查詢紀錄
+# full: 完整報告 (無下載權限)
+# simple: 簡易報告 (無下載權限)
 USERS = {
-    "chiu": {"password": "gshock2500!", "role": "full"},
-    "abs0401": {"password": "study01!", "role": "full"},
-    "chi01": {"password": "miwatch9!", "role": "full"},
-    "user1": {"password": "123", "role": "simple"},
-    "user2": {"password": "123", "role": "simple"}
+    "chiu": {"password": "gshock2500!!", "role": "superuser"}, # 唯一擁有追蹤權限的帳號
+    "chi01": {"password": "miwatch9!!", "role": "full"},      # 完整版帳號 1
+    "abs0401": {"password": "study01!", "role": "full"},      # 完整版帳號 2
+    "user1": {"password": "123", "role": "simple"},     # 簡易版帳號 1
+    "user2": {"password": "123", "role": "simple"}      # 簡易版帳號 2
 }
 
 def check_login():
@@ -32,7 +51,7 @@ def check_login():
             if username in USERS and USERS[username]["password"] == password:
                 st.session_state.authenticated = True
                 st.session_state.user = username
-                st.session_state.role = USERS[username]["role"] # 記錄該使用者的權限
+                st.session_state.role = USERS[username]["role"]
                 st.rerun()
             else:
                 st.error("帳號或密碼錯誤！")
@@ -42,10 +61,36 @@ def check_login():
 if not check_login():
     st.stop()
 
-# 側邊欄顯示使用者身分
-role_display = "🌟 完整版權限" if st.session_state.role == "full" else "👁️ 簡易版權限"
+# ==========================================
+# 側邊欄：使用者資訊與管理員專區
+# ==========================================
+# 根據權限顯示不同的身分標籤
+if st.session_state.role == "superuser":
+    role_display = "👑 最高管理者 (含追蹤權限)"
+elif st.session_state.role == "full":
+    role_display = "🌟 完整版權限"
+else:
+    role_display = "👁️ 簡易版權限"
+
 st.sidebar.write(f"歡迎回來，**{st.session_state.user}**")
 st.sidebar.write(f"當前身分：{role_display}")
+
+# 【權限控管】僅有 superuser (最高管理者) 可見下載日誌區塊
+if st.session_state.role == "superuser":
+    st.sidebar.markdown("---")
+    st.sidebar.write("🛠️ **系統管理專區**")
+    if os.path.exists("query_logs.csv"):
+        with open("query_logs.csv", "rb") as f:
+            st.sidebar.download_button(
+                label="📥 下載所有查詢紀錄 (CSV)",
+                data=f,
+                file_name=f"Query_Logs_{datetime.now(pytz.timezone('Asia/Taipei')).strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+    else:
+        st.sidebar.caption("目前尚無任何人查詢紀錄")
+
+st.sidebar.markdown("---")
 if st.sidebar.button("登出"):
     st.session_state.authenticated = False
     st.rerun()
@@ -63,6 +108,9 @@ if st.button("🚀 開始分析"):
     if not stock_input:
         st.warning("請輸入至少一檔股票代號！")
     else:
+        # 記錄這筆查詢到 CSV 中 (所有人查詢都會被記錄)
+        log_query(st.session_state.user, stock_input)
+        
         current_mode = 'intraday' if '盤中' in mode_choice else 'after_market'
         stock_list = list(dict.fromkeys([s.strip() for s in stock_input.split() if s.strip()]))
         
@@ -102,10 +150,9 @@ if st.button("🚀 開始分析"):
                     # ==========================================
                     # 3. 根據權限顯示不同深度的報告
                     # ==========================================
-                    if st.session_state.role == "full":
-                        # --------- 【完整版】戰情儀表板 (對標 Excel 摘要表) ---------
-                        
-                        # 1. 頂部數據看板
+                    # 【權限控管】superuser 與 full 都可以看到完整的戰情儀表板
+                    if st.session_state.role in ["superuser", "full"]:
+                        # --------- 【完整版】戰情儀表板 ---------
                         col1, col2, col3, col4, col5 = st.columns(5)
                         col1.metric("機會分數", position["opportunity_score"])
                         col2.metric("魚頭分數", fish["fish_score"])
@@ -115,7 +162,6 @@ if st.button("🚀 開始分析"):
                         
                         st.markdown("---")
                         
-                        # 2. 狀態與評估區塊 (排版成左右兩列，對應 Excel 標題)
                         c1, c2 = st.columns(2)
                         with c1:
                             st.markdown(f"**🎯 大局狀態：** {position['candidate_status']}")
@@ -128,11 +174,8 @@ if st.button("🚀 開始分析"):
                             st.markdown(f"**🏢 基本面標籤：** {fundamental['fund_label']}")
                             st.markdown(f"**💡 實戰評估(規則式)：** {position.get('strategy_profile', '無')}")
                             
-                        # 3. 價格與防守區塊 (高亮顯示)
                         st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` *(容忍: {position.get('max_tolerance', 8.0)}%)* ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
                         
-                        # --------- 以下維持原本的 Tabs 分頁 ---------
-                        # 使用 Tabs 來收納龐大的資訊，讓網頁看起來乾淨
                         tab1, tab2, tab3 = st.tabs(["核心與基本面", "防禦與籌碼雷達", "體檢與預警明細"])
                         
                         with tab1:
@@ -164,7 +207,6 @@ if st.button("🚀 開始分析"):
                             with col_b:
                                 st.write("**【撤退檢查】**")
                                 for item, status in retreat["retreat_checks"]:
-                                    # 撤退檢查觸發通常是壞事(打叉)
                                     mark = "❌" if status is True else "✅" if status is False else "❓"
                                     st.caption(f"{mark} {item}")
                                 st.write("**【高檔預警】**")
@@ -173,7 +215,7 @@ if st.button("🚀 開始分析"):
                                     st.caption(f"{mark} {item}")
 
                     else:
-                        # --------- 【簡易版】顯示邏輯 (極簡版摘要) ---------
+                        # --------- 【簡易版】極簡版摘要 ---------
                         col1, col2, col3 = st.columns(3)
                         col1.metric("機會分數", position["opportunity_score"])
                         col2.metric("魚頭分數", fish["fish_score"])
