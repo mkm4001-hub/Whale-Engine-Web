@@ -19,7 +19,7 @@ from FinMind.data import DataLoader
 from whale_engines import *
 
 # ==========================================
-# 0. 輔助函式：日K、5分K 抓取與繪圖 (含圖片轉存給 Gemini)
+# 0. 輔助函式：日K、5分K 抓取與繪圖
 # ==========================================
 def get_kline_charts_and_images(stock_id, target_code):
     tz = pytz.timezone('Asia/Taipei')
@@ -77,7 +77,6 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
     
-    # 🌟 強化 AI 提示詞：明確教導 AI 日線與 5分K 的判讀標準
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
     請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分K走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
@@ -124,8 +123,8 @@ def log_query(username, stocks):
 USERS = {
     "chiu": {"password": "gshock2500!!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "chi01": {"password": "cc2468500", "role": "full"},
-    "abs0401": {"password": "study01!", "role": "full"},
+    "admin1": {"password": "pwd", "role": "full"},
+    "admin2": {"password": "pwd", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -151,7 +150,9 @@ def check_login():
 if not check_login():
     st.stop()
 
-# 側邊欄：使用者資訊與 Gemini API Key 檔案上傳
+# ==========================================
+# 側邊欄配置
+# ==========================================
 if st.session_state.role == "superuser":
     role_display = "👑 最高管理者 (含追蹤權限)"
 elif st.session_state.role == "full":
@@ -164,15 +165,22 @@ st.sidebar.write(f"當前身分：{role_display}")
 
 st.sidebar.markdown("---")
 st.sidebar.write("🤖 **Gemini AI 引擎配置**")
-# 🌟 修改：將直接輸入文字改為上傳 TXT 檔案
+
+# 🌟 新增防呆機制：確保讀取到的金鑰不是空的
+gemini_api_key = ""
 uploaded_key_file = st.sidebar.file_uploader("📂 上傳包含 API Key 的 .txt 檔", type=["txt"])
 
 if uploaded_key_file is not None:
-    gemini_api_key = uploaded_key_file.read().decode("utf-8").strip()
-    st.session_state["gemini_key"] = gemini_api_key
-    st.sidebar.success("✅ API Key 載入成功！")
-else:
-    gemini_api_key = st.session_state.get("gemini_key", "")
+    file_content = uploaded_key_file.getvalue().decode("utf-8").strip()
+    if len(file_content) == 0:
+        st.sidebar.error("❌ 檔案是空的 (0 Bytes)！請確認裡面有貼上金鑰並「存檔」。")
+    else:
+        gemini_api_key = file_content
+        st.session_state["gemini_key"] = gemini_api_key
+        st.sidebar.success("✅ API Key 載入成功！")
+elif "gemini_key" in st.session_state and st.session_state["gemini_key"]:
+    gemini_api_key = st.session_state["gemini_key"]
+    st.sidebar.success("✅ API Key 載入成功！(已記憶)")
 
 if st.session_state.role == "superuser":
     st.sidebar.markdown("---")
@@ -249,7 +257,6 @@ if st.button("🚀 開始分析"):
                     # 抓取日K與5分K圖表
                     fig_daily, fig_5m, img_daily, img_5m = get_kline_charts_and_images(stock_id, target_code)
 
-                    # --------- 戰情儀表板展示 ---------
                     col1, col2, col3, col4, col5 = st.columns(5)
                     col1.metric("機會分數", position["opportunity_score"])
                     col2.metric("魚頭分數", fish["fish_score"])
@@ -273,7 +280,6 @@ if st.button("🚀 開始分析"):
                         
                     st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
                     
-                    # 依權限顯示分頁
                     if st.session_state.role in ["superuser", "full"]:
                         tab1, tab2, tab3, tab4, tab5 = st.tabs([
                             "📈 K線圖表專區 (日K/5分K)", 
@@ -283,17 +289,15 @@ if st.button("🚀 開始分析"):
                             "體檢與預警明細"
                         ])
                         
-                        # --- Tab 1: K線圖表專區 ---
                         with tab1:
                             if fig_daily: st.plotly_chart(fig_daily, use_container_width=True)
                             if fig_5m: st.plotly_chart(fig_5m, use_container_width=True)
                             else: st.caption("目前無當日盤中分時資料。")
                             
-                        # --- Tab 2: Gemini 智能交叉審查 ---
                         with tab2:
                             st.write("### 🤖 Gemini 多模態趨勢吻合度審查")
                             if not gemini_api_key:
-                                st.warning("⚠️ 請先在左側側邊欄上傳包含【Gemini API Key】的 .txt 檔即可啟動此模組！")
+                                st.warning("⚠️ 未上傳有效 API Key，系統已自動略過 AI 交叉審查模組，僅執行常規量化程式。")
                             else:
                                 with st.spinner("Gemini 正在讀取 2 張 K 線圖與量化數據，進行長短線交叉比對中..."):
                                     system_summary = {
@@ -345,7 +349,6 @@ if st.button("🚀 開始分析"):
                                     mark = "❌" if status is True else "✅" if status is False else "❓"
                                     st.caption(f"{mark} {item}")
                     else:
-                        # 簡易版
                         st.markdown(f"**系統解讀：** {position.get('position_comment', '無')}")
                         st.markdown(f"**防守價：** {position['defensive_price']}")
                         st.markdown(f"**綜合風險狀態：** 撤退 [{retreat['risk_status']}] | 預警 [{warning['warning_status']}]")
