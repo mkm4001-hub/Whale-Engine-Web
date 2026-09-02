@@ -22,28 +22,22 @@ from whale_engines import *
 # 0. 輔助函式：日K、5分K 抓取與繪圖 (含圖片轉存給 Gemini)
 # ==========================================
 def get_kline_charts_and_images(stock_id, target_code):
-    """
-    抓取 2 個月日K 與 當日 5分K
-    回傳：(日K Plotly圖, 5分K Plotly圖, 日K PIL圖片, 5分K PIL圖片)
-    """
     tz = pytz.timezone('Asia/Taipei')
     ticker = yf.Ticker(target_code)
     
-    # 1. 抓取近 2 個月日K (約 60 天)
+    # 1. 抓取近 2 個月日K
     df_daily = ticker.history(period="60d", interval="1d")
     if not df_daily.empty and df_daily.index.tz is not None:
         df_daily.index = df_daily.index.tz_convert(tz)
     
-    # 2. 抓取當日 5 分K (抓 5d 確保連假後的第一個交易日也能取到完整的一天)
+    # 2. 抓取當日 5 分K
     df_5m = ticker.history(period="5d", interval="5m")
     if not df_5m.empty and df_5m.index.tz is not None:
         df_5m.index = df_5m.index.tz_convert(tz)
         latest_day = df_5m.index[-1].date()
         df_5m = df_5m[df_5m.index.date == latest_day]
-        # 篩選台股交易時段 09:00 ~ 13:35
         df_5m = df_5m.between_time('09:00', '13:35')
         
-    # --- 繪製網頁互動式圖表 (Plotly) ---
     def make_plotly_candle(df, title):
         if df.empty: return None
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
@@ -53,7 +47,6 @@ def get_kline_charts_and_images(stock_id, target_code):
             name='K線', increasing_line_color='red', decreasing_line_color='green'
         ), row=1, col=1)
         
-        # 成交量
         colors = ['red' if row['Close'] >= row['Open'] else 'green' for _, row in df.iterrows()]
         fig.add_trace(go.Bar(
             x=df.index.strftime('%Y-%m-%d %H:%M') if '5m' in title else df.index.strftime('%Y-%m-%d'),
@@ -66,7 +59,6 @@ def get_kline_charts_and_images(stock_id, target_code):
     fig_daily = make_plotly_candle(df_daily, f"[{stock_id}] 近2個月 日K線圖")
     fig_5m = make_plotly_candle(df_5m, f"[{stock_id}] 當日 5分鐘K線走勢圖 (09:00~13:30)")
 
-    # --- 繪製傳給 Gemini 視覺辨識用的靜態圖片 (mplfinance) ---
     def make_image_for_ai(df):
         if df.empty or len(df) < 5: return None
         df_copy = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
@@ -82,13 +74,10 @@ def get_kline_charts_and_images(stock_id, target_code):
 
 
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
-    """
-    調用 Gemini 視覺多模態模型交叉審查
-    """
     genai.configure(api_key=api_key)
-    # 使用兼具速度與視覺分析能力的 Flash 模型
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
     
+    # 🌟 強化 AI 提示詞：明確教導 AI 日線與 5分K 的判讀標準
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
     請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分K走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
@@ -102,12 +91,12 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     - 撤退與預警風險：{system_info.get('risk_status')}
     - 系統核心策略解讀：{system_info.get('strategy_profile')}
 
-    【請嚴格執行以下三項審查並給出結論】：
-    1. 【日K中長線結構審查】：日K線的均線排列、突破型態與成交量，是否支持系統「{system_info.get('fish_position')}」與「{system_info.get('candidate_status')}」的研判？有沒有指標看不出來但肉眼可見的型態破綻？
-    2. 【當日5分K短線動能比對】：盤中 09:00 至 13:30 的分時走勢中，是否出現主力當日出貨、量價背離或尾盤突襲拉抬的現象？防守價 {system_info.get('defensive_price')} 是否有實質支撐力道？
+    【請嚴格執行長短線交叉審查並給出結論】：
+    1. 【日K中長線大局審查】：日線代表大波段趨勢與支撐壓力。圖中的均線排列、型態與量價結構，是否支持系統「{system_info.get('fish_position')}」與「{system_info.get('candidate_status')}」的研判？
+    2. 【5分K短線微結構審查】：5分K代表當日主力的真實企圖與進出場時機。盤中走勢是否出現「假突破真出貨」、「拉高倒貨」或「尾盤急拉進貨」的微結構？這是否與日線趨勢產生背離？防守價 {system_info.get('defensive_price')} 在短線上是否有實質支撐？
     3. 【最終交叉核實結論】：
        - 吻合度評級：(極度吻合 / 基本吻合 / 出現背離 / 嚴重衝突)
-       - 實戰操盤提醒：給操盤手一句話最犀利的行動建議。
+       - 實戰操盤提醒：綜合日線大方向與 5分K 買賣氣勢，給操盤手一句話最犀利的行動建議。
     """
     
     contents = [prompt]
@@ -133,9 +122,9 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "gshock2500!!", "role": "superuser"}, # 你的專屬最高權限帳號
+    "chiu": {"password": "pwd", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "chi01": {"password": "cc2468500", "role": "full"},
+    "admin1": {"password": "pwd", "role": "full"},
     "admin2": {"password": "pwd", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
@@ -162,7 +151,7 @@ def check_login():
 if not check_login():
     st.stop()
 
-# 側邊欄：使用者資訊與 Gemini API Key 輸入
+# 側邊欄：使用者資訊與 Gemini API Key 檔案上傳
 if st.session_state.role == "superuser":
     role_display = "👑 最高管理者 (含追蹤權限)"
 elif st.session_state.role == "full":
@@ -175,14 +164,15 @@ st.sidebar.write(f"當前身分：{role_display}")
 
 st.sidebar.markdown("---")
 st.sidebar.write("🤖 **Gemini AI 引擎配置**")
-gemini_api_key = st.sidebar.text_input(
-    "請輸入 Gemini API Key", 
-    type="password", 
-    value=st.session_state.get("gemini_key", ""),
-    help="用於啟動 K線視覺交叉審查模組"
-)
-if gemini_api_key:
+# 🌟 修改：將直接輸入文字改為上傳 TXT 檔案
+uploaded_key_file = st.sidebar.file_uploader("📂 上傳包含 API Key 的 .txt 檔", type=["txt"])
+
+if uploaded_key_file is not None:
+    gemini_api_key = uploaded_key_file.read().decode("utf-8").strip()
     st.session_state["gemini_key"] = gemini_api_key
+    st.sidebar.success("✅ API Key 載入成功！")
+else:
+    gemini_api_key = st.session_state.get("gemini_key", "")
 
 if st.session_state.role == "superuser":
     st.sidebar.markdown("---")
@@ -303,9 +293,9 @@ if st.button("🚀 開始分析"):
                         with tab2:
                             st.write("### 🤖 Gemini 多模態趨勢吻合度審查")
                             if not gemini_api_key:
-                                st.warning("⚠️ 請先在左側側邊欄輸入你的【Gemini API Key】即可啟動此模組！")
+                                st.warning("⚠️ 請先在左側側邊欄上傳包含【Gemini API Key】的 .txt 檔即可啟動此模組！")
                             else:
-                                with st.spinner("Gemini 正在讀取 2 張 K 線圖與量化數據，交叉比對中..."):
+                                with st.spinner("Gemini 正在讀取 2 張 K 線圖與量化數據，進行長短線交叉比對中..."):
                                     system_summary = {
                                         "candidate_status": position['candidate_status'],
                                         "fish_position": position['fish_position'],
