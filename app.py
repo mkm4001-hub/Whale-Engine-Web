@@ -133,7 +133,7 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "gshock2500!", "role": "superuser"}, # 你的專屬最高權限帳號
+    "chiu": {"password": "gshock2500!!", "role": "superuser"}, # 你的專屬最高權限帳號
     "master": {"password": "pwd", "role": "superuser"},
     "chi01": {"password": "cc2468500", "role": "full"},
     "admin2": {"password": "pwd", "role": "full"},
