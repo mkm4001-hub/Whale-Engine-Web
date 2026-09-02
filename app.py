@@ -122,10 +122,10 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "pwd", "role": "superuser"}, 
+    "chiu": {"password": "gshock2500!!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "admin1": {"password": "pwd", "role": "full"},
-    "admin2": {"password": "pwd", "role": "full"},
+    "chi01": {"password": "cc2468500", "role": "full"},
+    "abs0401": {"password": "study01!", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
