@@ -5,3 +5,7 @@ openpyxl
 pandas
 numpy
 pytz
+plotly
+mplfinance
+google-generativeai
+Pillow
