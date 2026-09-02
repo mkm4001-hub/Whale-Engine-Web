@@ -1,17 +1,17 @@
 import streamlit as st
 import os
 import csv
+import time
+import random
 from datetime import datetime
 import pytz
 from FinMind.data import DataLoader
 
-# ==========================================
 # 載入我們獨立存放的 Whale Engines
-# ==========================================
 from whale_engines import *
 
 # ==========================================
-# 0. 查詢紀錄功能 (將資料寫入 CSV 檔案)
+# 0. 查詢紀錄功能 (寫入 CSV)
 # ==========================================
 def log_query(username, stocks):
     filename = "query_logs.csv"
@@ -19,23 +19,19 @@ def log_query(username, stocks):
     tz = pytz.timezone('Asia/Taipei')
     now = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
     
-    # 寫入 CSV，使用 utf-8-sig 確保 Excel 打開不會亂碼
     with open(filename, mode='a', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["查詢時間", "登入帳號", "查詢股號"]) # 建立標題列
+            writer.writerow(["查詢時間", "登入帳號", "查詢股號"])
         writer.writerow([now, username, stocks])
 
 # ==========================================
 # 1. 帳號密碼與權限分級系統 (三層架構)
 # ==========================================
-# superuser: 完整報告 + 下載查詢紀錄
-# full: 完整報告 (無下載權限)
-# simple: 簡易報告 (無下載權限)
 USERS = {
-    "chiu": {"password": "gshock2500!!", "role": "superuser"}, # 唯一擁有追蹤權限的帳號
-    "chi01": {"password": "cc2468500", "role": "full"},      # 完整版帳號 1
-    "abs0401": {"password": "study01!", "role": "full"},      # 完整版帳號 2
+    "master": {"password": "pwd", "role": "superuser"}, # 唯一擁有下載查詢紀錄權限
+    "admin1": {"password": "pwd", "role": "full"},      # 完整版帳號 1
+    "admin2": {"password": "pwd", "role": "full"},      # 完整版帳號 2
     "user1": {"password": "123", "role": "simple"},     # 簡易版帳號 1
     "user2": {"password": "123", "role": "simple"}      # 簡易版帳號 2
 }
@@ -44,7 +40,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒 GrandMaster Whale Engine")
+        st.title("🔒 GrandMaster Whale Engine V25.2")
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
@@ -61,10 +57,7 @@ def check_login():
 if not check_login():
     st.stop()
 
-# ==========================================
-# 側邊欄：使用者資訊與管理員專區
-# ==========================================
-# 根據權限顯示不同的身分標籤
+# 側邊欄身分顯示與管理員專區
 if st.session_state.role == "superuser":
     role_display = "👑 最高管理者 (含追蹤權限)"
 elif st.session_state.role == "full":
@@ -75,7 +68,6 @@ else:
 st.sidebar.write(f"歡迎回來，**{st.session_state.user}**")
 st.sidebar.write(f"當前身分：{role_display}")
 
-# 【權限控管】僅有 superuser (最高管理者) 可見下載日誌區塊
 if st.session_state.role == "superuser":
     st.sidebar.markdown("---")
     st.sidebar.write("🛠️ **系統管理專區**")
@@ -98,23 +90,27 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 GrandMaster Whale Engine V24.9 PRO")
+st.title("🐋 GrandMaster Whale Engine V25.2 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無需輸入 Token。")
 
-mode_choice = st.radio("選擇模式", ["盤後大局透視 (嚴格資料對齊)", "盤中極速模式 (純技術面)"])
+mode_choice = st.radio("選擇模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
 stock_input = st.text_input("請輸入股票代號 (多檔請用空白分隔，例如: 2330 3034)")
 
 if st.button("🚀 開始分析"):
     if not stock_input:
         st.warning("請輸入至少一檔股票代號！")
     else:
-        # 記錄這筆查詢到 CSV 中 (所有人查詢都會被記錄)
         log_query(st.session_state.user, stock_input)
         
         current_mode = 'intraday' if '盤中' in mode_choice else 'after_market'
         stock_list = list(dict.fromkeys([s.strip() for s in stock_input.split() if s.strip()]))
         
-        st.info("系統運算中，請稍候...")
+        st.info("系統運算中，請稍候... (已啟用防鎖隨機延遲保護)")
+        
+        # 建立進度條
+        progress_text = "批次掃描進度"
+        my_bar = st.progress(0, text=progress_text)
+        total_stocks = len(stock_list)
         
         try:
             dl = DataLoader()
@@ -127,13 +123,16 @@ if st.button("🚀 開始分析"):
             warning_engine = EarlyWarningEngine()
             defense_engine = SmartMoneyDefenseEngine()
             chip_engine = ChipRadarEngine()
+            xray_engine = ChipXRayEngine()
             
-            for stock_id in stock_list:
-                st.subheader(f"📊 [{stock_id}] 實戰分析報告")
+            for idx, stock_id in enumerate(stock_list):
+                st.subheader(f"📊 [{stock_id}] 實戰分析報告 (V25.2)")
                 
                 try:
-                    df, target_code, data_quality, rev_df = data_engine.load_stock(stock_id, current_mode)
-                    mkt = data_engine.load_market(target_code)
+                    df, target_code, data_quality, rev_df, tdcc_df = data_engine.load_stock(stock_id, current_mode)
+                    
+                    # 🌟 V25.2 修改：傳入個股最新日期給 load_market，提供 OTC 備援判斷
+                    mkt = data_engine.load_market(target_code, data_quality['latest_price_date'])
                     data = data_engine.prepare_indicators(df, mkt)
                     data['data_quality'] = data_quality
                     
@@ -147,10 +146,8 @@ if st.button("🚀 開始分析"):
                     position = position_engine.calculate(data, fish, retreat, warning, endurance, defense, fundamental)
                     chip = chip_engine.calculate(data, current_mode)
                     
-                    # ==========================================
-                    # 3. 根據權限顯示不同深度的報告
-                    # ==========================================
-                    # 【權限控管】superuser 與 full 都可以看到完整的戰情儀表板
+                    chip_xray = xray_engine.calculate(tdcc_df, position)
+                    
                     if st.session_state.role in ["superuser", "full"]:
                         # --------- 【完整版】戰情儀表板 ---------
                         col1, col2, col3, col4, col5 = st.columns(5)
@@ -176,6 +173,11 @@ if st.button("🚀 開始分析"):
                             
                         st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` *(容忍: {position.get('max_tolerance', 8.0)}%)* ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
                         
+                        if chip_xray['is_surge']:
+                            st.success(f"🔥 **【集保 X 光透視】{chip_xray['xray_status']}**：{chip_xray['xray_message']}")
+                        else:
+                            st.info(f"🔍 **【集保 X 光透視】{chip_xray['xray_status']}**：{chip_xray['xray_message']}")
+                        
                         tab1, tab2, tab3 = st.tabs(["核心與基本面", "防禦與籌碼雷達", "體檢與預警明細"])
                         
                         with tab1:
@@ -194,7 +196,7 @@ if st.button("🚀 開始分析"):
                             else:
                                 st.caption("- 無明顯防守跡象")
                                 
-                            st.write(f"**【盤後籌碼透視】當前狀態：** {chip.get('chip_status', '無資料')}")
+                            st.write(f"**【盤後法人透視】當前狀態：** {chip.get('chip_status', '無資料')}")
                             for msg in chip.get('chip_messages', []): st.caption(f"- {msg}")
 
                         with tab3:
@@ -224,11 +226,20 @@ if st.button("🚀 開始分析"):
                         st.markdown(f"**系統解讀：** {position.get('position_comment', '無')}")
                         st.markdown(f"**防守價：** {position['defensive_price']} ({position.get('defensive_status_text', '')})")
                         st.markdown(f"**綜合風險狀態：** 撤退 [{retreat['risk_status']}] | 預警 [{warning['warning_status']}]")
+                        st.caption(f"🔍 **集保透視：** {chip_xray['xray_message']}")
                         
                     st.divider()
+                    
+                    # 🌟 V25.2 修改：每一檔股票掃描完畢，強制執行隨機緩衝延遲 (1.5 ~ 3.5秒)
+                    my_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} (正在處理: {stock_id}...)")
+                    if idx < total_stocks - 1:
+                        delay_time = random.uniform(1.5, 3.5)
+                        time.sleep(delay_time)
+                        
                 except Exception as e:
                     st.error(f"分析 {stock_id} 時發生錯誤: {str(e)}")
                     
+            my_bar.progress(1.0, text="批次掃描完成！")
             st.success("全部分析完成！")
         except Exception as e:
             st.error(f"系統啟動失敗。錯誤訊息: {str(e)}")
