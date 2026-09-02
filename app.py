@@ -19,7 +19,7 @@ from FinMind.data import DataLoader
 from whale_engines import *
 
 # ==========================================
-# 0. 輔助函式：日K、5分K 抓取與繪圖
+# 0. 輔助函式：日K、5分K(折線) 抓取與繪圖
 # ==========================================
 def get_kline_charts_and_images(stock_id, target_code):
     tz = pytz.timezone('Asia/Taipei')
@@ -30,56 +30,70 @@ def get_kline_charts_and_images(stock_id, target_code):
     if not df_daily.empty and df_daily.index.tz is not None:
         df_daily.index = df_daily.index.tz_convert(tz)
     
-    # 2. 抓取當日 5 分K
+    # 2. 抓取當日 5 分K (強化資料截取正確性)
     df_5m = ticker.history(period="5d", interval="5m")
     if not df_5m.empty and df_5m.index.tz is not None:
         df_5m.index = df_5m.index.tz_convert(tz)
-        latest_day = df_5m.index[-1].date()
-        df_5m = df_5m[df_5m.index.date == latest_day]
-        df_5m = df_5m.between_time('09:00', '13:35')
+        # 精準鎖定最後一個有交易的日期
+        unique_dates = pd.Series(df_5m.index.date).unique()
+        if len(unique_dates) > 0:
+            latest_day = unique_dates[-1]
+            df_5m = df_5m[df_5m.index.date == latest_day]
+            # 嚴格裁切台股交易時間
+            df_5m = df_5m.between_time('09:00', '13:35')
         
-    def make_plotly_candle(df, title):
+    def make_plotly_chart(df, title, is_line=False):
         if df.empty: return None
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(
-            x=df.index.strftime('%Y-%m-%d %H:%M') if '5m' in title else df.index.strftime('%Y-%m-%d'),
-            open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-            name='K線', increasing_line_color='red', decreasing_line_color='green'
-        ), row=1, col=1)
+        
+        x_data = df.index.strftime('%Y-%m-%d %H:%M') if is_line else df.index.strftime('%Y-%m-%d')
+        
+        if is_line:
+            # 5分鐘圖：改為折線圖 (Line Chart)
+            fig.add_trace(go.Scatter(
+                x=x_data, y=df['Close'], mode='lines', name='走勢', 
+                line=dict(color='#1f77b4', width=2)
+            ), row=1, col=1)
+        else:
+            # 日線圖：維持 K線圖 (Candlestick)
+            fig.add_trace(go.Candlestick(
+                x=x_data, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+                name='K線', increasing_line_color='red', decreasing_line_color='green'
+            ), row=1, col=1)
         
         colors = ['red' if row['Close'] >= row['Open'] else 'green' for _, row in df.iterrows()]
         fig.add_trace(go.Bar(
-            x=df.index.strftime('%Y-%m-%d %H:%M') if '5m' in title else df.index.strftime('%Y-%m-%d'),
-            y=df['Volume'], marker_color=colors, name='成交量'
+            x=x_data, y=df['Volume'], marker_color=colors, name='成交量'
         ), row=2, col=1)
         
         fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=400, margin=dict(l=20, r=20, t=40, b=20))
         return fig
 
-    fig_daily = make_plotly_candle(df_daily, f"[{stock_id}] 近2個月 日K線圖")
-    fig_5m = make_plotly_candle(df_5m, f"[{stock_id}] 當日 5分鐘K線走勢圖 (09:00~13:30)")
+    fig_daily = make_plotly_chart(df_daily, f"[{stock_id}] 近2個月 日K線圖", is_line=False)
+    fig_5m = make_plotly_chart(df_5m, f"[{stock_id}] 當日 5分鐘折線走勢圖 (09:00~13:30)", is_line=True)
 
-    def make_image_for_ai(df):
+    def make_image_for_ai(df, chart_type='candle'):
         if df.empty or len(df) < 5: return None
         df_copy = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
         buf = io.BytesIO()
-        mpf.plot(df_copy, type='candle', volume=True, style='charles', savefig=dict(fname=buf, dpi=100, bbox_inches='tight'))
+        mpf.plot(df_copy, type=chart_type, volume=True, style='charles', savefig=dict(fname=buf, dpi=100, bbox_inches='tight'))
         buf.seek(0)
         return Image.open(buf)
 
-    img_daily = make_image_for_ai(df_daily)
-    img_5m = make_image_for_ai(df_5m)
+    img_daily = make_image_for_ai(df_daily, chart_type='candle')
+    img_5m = make_image_for_ai(df_5m, chart_type='line') # 傳給 AI 的也改為折線圖
 
     return fig_daily, fig_5m, img_daily, img_5m
 
 
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    # 🌟 修正：改回最穩定通用端點，解決 404 報錯
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分K走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -92,10 +106,10 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
 
     【請嚴格執行長短線交叉審查並給出結論】：
     1. 【日K中長線大局審查】：日線代表大波段趨勢與支撐壓力。圖中的均線排列、型態與量價結構，是否支持系統「{system_info.get('fish_position')}」與「{system_info.get('candidate_status')}」的研判？
-    2. 【5分K短線微結構審查】：5分K代表當日主力的真實企圖與進出場時機。盤中走勢是否出現「假突破真出貨」、「拉高倒貨」或「尾盤急拉進貨」的微結構？這是否與日線趨勢產生背離？防守價 {system_info.get('defensive_price')} 在短線上是否有實質支撐？
+    2. 【當日5分折線短線動能比對】：盤中 09:00 至 13:30 的分時折線走勢中，是否出現「假突破真出貨」、「拉高倒貨」或「尾盤急拉進貨」的微結構？這是否與日線趨勢產生背離？防守價 {system_info.get('defensive_price')} 在短線上是否有實質支撐？
     3. 【最終交叉核實結論】：
        - 吻合度評級：(極度吻合 / 基本吻合 / 出現背離 / 嚴重衝突)
-       - 實戰操盤提醒：綜合日線大方向與 5分K 買賣氣勢，給操盤手一句話最犀利的行動建議。
+       - 實戰操盤提醒：綜合日線大方向與 5分線買賣氣勢，給操盤手一句話最犀利的行動建議。
     """
     
     contents = [prompt]
@@ -121,7 +135,7 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "gshock2500!!", "role": "superuser"}, 
+    "chiu": {"password": "pwd", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
     "admin1": {"password": "pwd", "role": "full"},
     "admin2": {"password": "pwd", "role": "full"},
@@ -166,7 +180,6 @@ st.sidebar.write(f"當前身分：{role_display}")
 st.sidebar.markdown("---")
 st.sidebar.write("🤖 **Gemini AI 引擎配置**")
 
-# 🌟 新增防呆機制：確保讀取到的金鑰不是空的
 gemini_api_key = ""
 uploaded_key_file = st.sidebar.file_uploader("📂 上傳包含 API Key 的 .txt 檔", type=["txt"])
 
@@ -254,7 +267,7 @@ if st.button("🚀 開始分析"):
                     chip = chip_engine.calculate(data, current_mode)
                     chip_xray = xray_engine.calculate(tdcc_df, position)
                     
-                    # 抓取日K與5分K圖表
+                    # 抓取日K與5分折線圖表
                     fig_daily, fig_5m, img_daily, img_5m = get_kline_charts_and_images(stock_id, target_code)
 
                     col1, col2, col3, col4, col5 = st.columns(5)
@@ -282,7 +295,7 @@ if st.button("🚀 開始分析"):
                     
                     if st.session_state.role in ["superuser", "full"]:
                         tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                            "📈 K線圖表專區 (日K/5分K)", 
+                            "📈 圖表專區 (日K/5分折線)", 
                             "🤖 Gemini 趨勢吻合度審查", 
                             "核心與基本面", 
                             "防禦與籌碼雷達", 
@@ -299,7 +312,7 @@ if st.button("🚀 開始分析"):
                             if not gemini_api_key:
                                 st.warning("⚠️ 未上傳有效 API Key，系統已自動略過 AI 交叉審查模組，僅執行常規量化程式。")
                             else:
-                                with st.spinner("Gemini 正在讀取 2 張 K 線圖與量化數據，進行長短線交叉比對中..."):
+                                with st.spinner("Gemini 正在讀取日K與5分折線圖，進行長短線交叉比對中..."):
                                     system_summary = {
                                         "candidate_status": position['candidate_status'],
                                         "fish_position": position['fish_position'],
