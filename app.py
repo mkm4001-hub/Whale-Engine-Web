@@ -29,9 +29,9 @@ def log_query(username, stocks):
 # 1. 帳號密碼與權限分級系統 (三層架構)
 # ==========================================
 USERS = {
-    "master": {"password": "pwd", "role": "superuser"}, # 唯一擁有下載查詢紀錄權限
-    "admin1": {"password": "pwd", "role": "full"},      # 完整版帳號 1
-    "admin2": {"password": "pwd", "role": "full"},      # 完整版帳號 2
+    "chiu": {"password": "gshock2500!!", "role": "superuser"}, # 唯一擁有下載查詢紀錄權限
+    "chi01": {"password": "cc2468500", "role": "full"},      # 完整版帳號 1
+    "abs0401": {"password": "study01!", "role": "full"},      # 完整版帳號 2
     "user1": {"password": "123", "role": "simple"},     # 簡易版帳號 1
     "user2": {"password": "123", "role": "simple"}      # 簡易版帳號 2
 }
