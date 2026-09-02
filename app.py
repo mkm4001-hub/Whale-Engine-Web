@@ -25,21 +25,17 @@ def get_kline_charts_and_images(stock_id, target_code):
     tz = pytz.timezone('Asia/Taipei')
     ticker = yf.Ticker(target_code)
     
-    # 1. 抓取近 2 個月日K
     df_daily = ticker.history(period="60d", interval="1d")
     if not df_daily.empty and df_daily.index.tz is not None:
         df_daily.index = df_daily.index.tz_convert(tz)
     
-    # 2. 抓取當日 5 分K (強化資料截取正確性)
     df_5m = ticker.history(period="5d", interval="5m")
     if not df_5m.empty and df_5m.index.tz is not None:
         df_5m.index = df_5m.index.tz_convert(tz)
-        # 精準鎖定最後一個有交易的日期
         unique_dates = pd.Series(df_5m.index.date).unique()
         if len(unique_dates) > 0:
             latest_day = unique_dates[-1]
             df_5m = df_5m[df_5m.index.date == latest_day]
-            # 嚴格裁切台股交易時間
             df_5m = df_5m.between_time('09:00', '13:35')
         
     def make_plotly_chart(df, title, is_line=False):
@@ -49,13 +45,11 @@ def get_kline_charts_and_images(stock_id, target_code):
         x_data = df.index.strftime('%Y-%m-%d %H:%M') if is_line else df.index.strftime('%Y-%m-%d')
         
         if is_line:
-            # 5分鐘圖：改為折線圖 (Line Chart)
             fig.add_trace(go.Scatter(
                 x=x_data, y=df['Close'], mode='lines', name='走勢', 
                 line=dict(color='#1f77b4', width=2)
             ), row=1, col=1)
         else:
-            # 日線圖：維持 K線圖 (Candlestick)
             fig.add_trace(go.Candlestick(
                 x=x_data, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
                 name='K線', increasing_line_color='red', decreasing_line_color='green'
@@ -81,15 +75,14 @@ def get_kline_charts_and_images(stock_id, target_code):
         return Image.open(buf)
 
     img_daily = make_image_for_ai(df_daily, chart_type='candle')
-    img_5m = make_image_for_ai(df_5m, chart_type='line') # 傳給 AI 的也改為折線圖
+    img_5m = make_image_for_ai(df_5m, chart_type='line')
 
     return fig_daily, fig_5m, img_daily, img_5m
 
 
+# 🌟 核心升級：AI 自動備援機制
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
-    # 🌟 修正：改回最穩定通用端點，解決 404 報錯
-    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
@@ -116,8 +109,20 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     if img_daily is not None: contents.append(img_daily)
     if img_5m is not None: contents.append(img_5m)
     
-    response = model.generate_content(contents)
-    return response.text
+    # 建立模型嘗試清單，依序降級尋找可用模型
+    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro-vision']
+    last_error = ""
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(contents)
+            return f"*(🤖 本次由 `{model_name}` 模型成功提供分析)*\n\n" + response.text
+        except Exception as e:
+            last_error = str(e)
+            continue
+            
+    raise Exception(f"API 金鑰無效或多模態模型皆無法連線，最終錯誤：{last_error}")
 
 
 # ==========================================
