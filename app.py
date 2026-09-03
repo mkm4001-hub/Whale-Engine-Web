@@ -41,7 +41,6 @@ def get_kline_charts_and_images(stock_id, target_code):
     def make_plotly_chart(df, title, is_line=False):
         if df.empty: return None
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-        
         x_data = df.index.strftime('%Y-%m-%d %H:%M') if is_line else df.index.strftime('%Y-%m-%d')
         
         if is_line:
@@ -80,13 +79,13 @@ def get_kline_charts_and_images(stock_id, target_code):
     return fig_daily, fig_5m, img_daily, img_5m
 
 
-# 🌟 核心升級：AI 自動尋找模型機制
+# 🌟 回傳文字結果與確切模型版本
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合，明日可能走勢方向為何?怎麼判斷?
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -110,16 +109,14 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     if img_5m is not None: contents.append(img_5m)
     
     try:
-        # 動態去問 Google 伺服器：這個金鑰能用哪些模型？
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     except Exception as e:
-        raise Exception(f"無法獲取可用模型清單，請確認 API Key 是否正確且有效！({str(e)})")
+        raise Exception(f"無法獲取可用模型清單，請確認 API Key 是否有效！({str(e)})")
         
     if not available_models:
-        raise Exception("你的 API Key 沒有任何可用視覺模型的存取權限。")
+        raise Exception("此 API Key 沒有可用的多模態視覺模型權限。")
         
-    # 自動挑選最適合看圖的新版模型
-    target_model = available_models[0] 
+    target_model = available_models[0]
     for pref in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.5-flash-latest']:
         if pref in available_models:
             target_model = pref
@@ -128,9 +125,10 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     try:
         model = genai.GenerativeModel(target_model)
         response = model.generate_content(contents)
-        return f"*(🤖 本次成功由 `{target_model}` 模型自動分配運算)*\n\n" + response.text
+        clean_model_name = target_model.replace("models/", "")
+        return response.text, clean_model_name
     except Exception as e:
-        raise Exception(f"使用模型 {target_model} 分析失敗！\n錯誤訊息：{str(e)}\n(伺服器回報可用模型清單：{available_models})")
+        raise Exception(f"使用模型 {target_model} 分析失敗：{str(e)}")
 
 
 # ==========================================
@@ -148,10 +146,10 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "gshock2500!", "role": "superuser"}, 
+    "chiu": {"password": "pwd", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "chiu": {"password": "cc2468500", "role": "full"},
-    "abs0401": {"password": "study01!", "role": "full"},
+    "admin1": {"password": "pwd", "role": "full"},
+    "admin2": {"password": "pwd", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -160,7 +158,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒巨鯨引擎 V25.2")
+        st.title("🔒 GrandMaster Whale Engine V25.2")
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
@@ -337,9 +335,11 @@ if st.button("🚀 開始分析"):
                                         "strategy_profile": position.get('strategy_profile', '')
                                     }
                                     try:
-                                        gemini_audit_result = call_gemini_audit(
+                                        gemini_audit_result, used_model = call_gemini_audit(
                                             gemini_api_key, stock_id, system_summary, img_daily, img_5m
                                         )
+                                        # 🌟 醒目標記目前使用的 AI 版本
+                                        st.success(f"🤖 **目前調用 AI 版本**：`{used_model}`")
                                         st.markdown(gemini_audit_result)
                                     except Exception as ai_err:
                                         st.error(f"Gemini 連線或分析失敗: {str(ai_err)}")
