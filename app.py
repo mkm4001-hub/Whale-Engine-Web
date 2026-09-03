@@ -15,7 +15,7 @@ from PIL import Image
 import google.generativeai as genai
 from FinMind.data import DataLoader
 
-# 載入 V25.2 Whale Engines
+# 載入 V25.2 Whale Engines (使用目前穩定的主程式)
 from whale_engines import *
 
 # ==========================================
@@ -24,16 +24,17 @@ from whale_engines import *
 def get_kline_charts_and_images(stock_id, target_code):
     tz = pytz.timezone('Asia/Taipei')
     
-    # 🌟 新增防爬蟲：每次抓圖前隨機延遲 0.5 ~ 1.5 秒，模擬人類行為
+    # 防爬蟲：每次抓圖前隨機延遲 0.5 ~ 1.5 秒
     time.sleep(random.uniform(0.5, 1.5))
     ticker = yf.Ticker(target_code)
     
-    # --- 1. 抓取日 K 線 (多抓以計算均線，最後裁切近2個月) ---
+    # --- 1. 抓取日 K 線 ---
     df_daily = ticker.history(period="4mo", interval="1d")
-    if not df_daily.empty and df_daily.index.tz is not None:
-        df_daily.index = df_daily.index.tz_convert(tz)
+    if not df_daily.empty:
+        df_daily.index = pd.to_datetime(df_daily.index)
+        if getattr(df_daily.index, 'tz', None) is not None:
+            df_daily.index = df_daily.index.tz_convert(tz)
         
-        # 計算 5, 10, 20 均價與均量
         df_daily['MA5'] = df_daily['Close'].rolling(5).mean()
         df_daily['MA10'] = df_daily['Close'].rolling(10).mean()
         df_daily['MA20'] = df_daily['Close'].rolling(20).mean()
@@ -41,20 +42,21 @@ def get_kline_charts_and_images(stock_id, target_code):
         df_daily['VMA10'] = df_daily['Volume'].rolling(10).mean()
         df_daily['VMA20'] = df_daily['Volume'].rolling(20).mean()
         
-        # 嚴格裁切出最後 60 天 (約2個月)
         df_daily = df_daily.tail(60)
     
-    # --- 2. 抓取 5 分鐘折線圖 (自動判斷最新交易日) ---
+    # --- 2. 抓取 5 分鐘折線圖 ---
     df_5m = ticker.history(period="5d", interval="5m")
-    if not df_5m.empty and df_5m.index.tz is not None:
-        df_5m.index = df_5m.index.tz_convert(tz)
+    latest_day_str = "" # 🌟 用來儲存 5分K 的實際日期
+    if not df_5m.empty:
+        df_5m.index = pd.to_datetime(df_5m.index)
+        if getattr(df_5m.index, 'tz', None) is not None:
+            df_5m.index = df_5m.index.tz_convert(tz)
         
-        # 自動鎖定最後一個有交易的日期 (9/3 08:59 會停在 9/2；09:00 就會切到 9/3)
         unique_dates = pd.Series(df_5m.index.date).unique()
         if len(unique_dates) > 0:
             latest_day = unique_dates[-1]
+            latest_day_str = latest_day.strftime('%Y-%m-%d') # 取得日期字串
             df_5m = df_5m[df_5m.index.date == latest_day]
-            # 嚴格裁切台股交易時間 09:00 ~ 13:35
             df_5m = df_5m.between_time('09:00', '13:35')
         
     # --- 網頁 Plotly 繪圖函式 ---
@@ -64,21 +66,17 @@ def get_kline_charts_and_images(stock_id, target_code):
         x_data = df.index.strftime('%Y-%m-%d %H:%M') if is_line else df.index.strftime('%Y-%m-%d')
         
         if is_line:
-            # 5分K折線
             fig.add_trace(go.Scatter(x=x_data, y=df['Close'], mode='lines', name='走勢', line=dict(color='#1f77b4', width=2)), row=1, col=1)
         else:
-            # 日線K線與均線
             fig.add_trace(go.Candlestick(x=x_data, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
             fig.add_trace(go.Scatter(x=x_data, y=df['MA5'], mode='lines', name='5MA', line=dict(color='orange', width=1.5)), row=1, col=1)
             fig.add_trace(go.Scatter(x=x_data, y=df['MA10'], mode='lines', name='10MA', line=dict(color='blue', width=1.5)), row=1, col=1)
             fig.add_trace(go.Scatter(x=x_data, y=df['MA20'], mode='lines', name='20MA', line=dict(color='purple', width=1.5)), row=1, col=1)
         
-        # 成交量區塊
         colors = ['red' if row['Close'] >= row['Open'] else 'green' for _, row in df.iterrows()]
         fig.add_trace(go.Bar(x=x_data, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
         
         if not is_line:
-            # 日線均量線
             fig.add_trace(go.Scatter(x=x_data, y=df['VMA5'], mode='lines', name='VMA5', line=dict(color='orange', width=1)), row=2, col=1)
             fig.add_trace(go.Scatter(x=x_data, y=df['VMA10'], mode='lines', name='VMA10', line=dict(color='blue', width=1)), row=2, col=1)
             fig.add_trace(go.Scatter(x=x_data, y=df['VMA20'], mode='lines', name='VMA20', line=dict(color='purple', width=1)), row=2, col=1)
@@ -87,7 +85,10 @@ def get_kline_charts_and_images(stock_id, target_code):
         return fig
 
     fig_daily = make_plotly_chart(df_daily, f"[{stock_id}] 近2個月 日K線圖 (含5/10/20均價與均量)", is_line=False)
-    fig_5m = make_plotly_chart(df_5m, f"[{stock_id}] 當日 5分鐘折線走勢圖 (09:00~13:30)", is_line=True)
+    
+    # 🌟 修改：將取得的日期動態加入 5分K 標題中
+    title_5m = f"[{stock_id}] 當日 5分鐘折線走勢圖 ({latest_day_str} 09:00~13:30)" if latest_day_str else f"[{stock_id}] 當日 5分鐘折線走勢圖 (09:00~13:30)"
+    fig_5m = make_plotly_chart(df_5m, title_5m, is_line=True)
 
     # --- AI 辨識圖片繪圖函式 ---
     def make_image_for_ai(df, chart_type='candle', is_daily=False):
@@ -96,14 +97,13 @@ def get_kline_charts_and_images(stock_id, target_code):
         
         apds = []
         if is_daily:
-            # 給 AI 看的圖片也要加上均線
             apds = [
-                mpf.make_addplot(df['MA5'], color='orange', width=1),
-                mpf.make_addplot(df['MA10'], color='blue', width=1),
-                mpf.make_addplot(df['MA20'], color='purple', width=1),
-                mpf.make_addplot(df['VMA5'], color='orange', width=1, panel=1),
-                mpf.make_addplot(df['VMA10'], color='blue', width=1, panel=1),
-                mpf.make_addplot(df['VMA20'], color='purple', width=1, panel=1),
+                mpf.make_addplot(df_copy['MA5'], color='orange', width=1),
+                mpf.make_addplot(df_copy['MA10'], color='blue', width=1),
+                mpf.make_addplot(df_copy['MA20'], color='purple', width=1),
+                mpf.make_addplot(df_copy['VMA5'], color='orange', width=1, panel=1),
+                mpf.make_addplot(df_copy['VMA10'], color='blue', width=1, panel=1),
+                mpf.make_addplot(df_copy['VMA20'], color='purple', width=1, panel=1),
             ]
         
         buf = io.BytesIO()
@@ -123,7 +123,7 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合；並依照趨勢，評估隔天開盤可能股票走向，如何觀察。
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合，並說明如何依照5分線圖初步觀看大盤意圖。再請你依著台股常態，判斷隔日有可能的走勢與發展方向。
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -187,7 +187,7 @@ USERS = {
     "chiu": {"password": "pwd001!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
     "chi01": {"password": "cc2468500", "role": "full"},
-    "abs0401": {"password": "study01!", "role": "full"},
+    "abs0401": {"password": "pwd002!", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -343,16 +343,16 @@ if st.button("🚀 開始分析"):
                     st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
                     
                     if st.session_state.role in ["superuser", "full"]:
+                        # 🌟 修改：更新了分頁 2 的名稱
                         tab1, tab2, tab3, tab4, tab5 = st.tabs([
                             "📈 圖表專區 (日K/5分折線)", 
-                            "🤖 Gemini 趨勢吻合度審查", 
+                            "🤖 GEMINI AI趨勢分析", 
                             "核心與基本面", 
                             "防禦與籌碼雷達", 
                             "體檢與預警明細"
                         ])
                         
                         with tab1:
-                            # 🌟 強化顯示：無資料時跳出防呆提示
                             if fig_daily: 
                                 st.plotly_chart(fig_daily, use_container_width=True)
                             else: 
@@ -364,7 +364,7 @@ if st.button("🚀 開始分析"):
                                 st.warning("⚠️ 尚未有當日 5 分鐘盤中資料，或訊號不穩定連線失敗。")
                             
                         with tab2:
-                            st.write("### 🤖 Gemini 多模態趨勢吻合度審查")
+                            st.write("### 🤖 GEMINI AI趨勢分析")
                             if not gemini_api_key:
                                 st.warning("⚠️ 未上傳有效 API Key，系統已自動略過 AI 交叉審查模組，僅執行常規量化程式。")
                             else:
@@ -405,16 +405,18 @@ if st.button("🚀 開始分析"):
                         with tab5:
                             col_a, col_b = st.columns(2)
                             with col_a:
-                                st.write("**【魚頭體檢】**")
+                                # 🌟 修改：加上正面指標文字
+                                st.markdown("**【魚頭體檢】** `(正面指標)`")
                                 for item, status in fish["health_checks"]:
                                     mark = "✅" if status is True else "❌" if status is False else "❓"
                                     st.caption(f"{mark} {item}")
                             with col_b:
-                                st.write("**【撤退檢查】**")
+                                # 🌟 修改：加上負面指標文字
+                                st.markdown("**【撤退檢查】** `(負面指標)`")
                                 for item, status in retreat["retreat_checks"]:
                                     mark = "❌" if status is True else "✅" if status is False else "❓"
                                     st.caption(f"{mark} {item}")
-                                st.write("**【高檔預警】**")
+                                st.markdown("**【高檔預警】** `(負面指標)`")
                                 for item, status in warning["warning_checks"]:
                                     mark = "❌" if status is True else "✅" if status is False else "❓"
                                     st.caption(f"{mark} {item}")
