@@ -196,7 +196,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒 邱專屬看盤系統")
+        st.title("🔒 巨鯨系統V25.2)
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
