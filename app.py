@@ -80,7 +80,7 @@ def get_kline_charts_and_images(stock_id, target_code):
     return fig_daily, fig_5m, img_daily, img_5m
 
 
-# 🌟 核心升級：AI 自動備援機制
+# 🌟 核心升級：AI 自動尋找模型機制
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
@@ -109,20 +109,28 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     if img_daily is not None: contents.append(img_daily)
     if img_5m is not None: contents.append(img_5m)
     
-    # 建立模型嘗試清單，依序降級尋找可用模型
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro-vision']
-    last_error = ""
-    
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(contents)
-            return f"*(🤖 本次由 `{model_name}` 模型成功提供分析)*\n\n" + response.text
-        except Exception as e:
-            last_error = str(e)
-            continue
+    try:
+        # 動態去問 Google 伺服器：這個金鑰能用哪些模型？
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    except Exception as e:
+        raise Exception(f"無法獲取可用模型清單，請確認 API Key 是否正確且有效！({str(e)})")
+        
+    if not available_models:
+        raise Exception("你的 API Key 沒有任何可用視覺模型的存取權限。")
+        
+    # 自動挑選最適合看圖的新版模型
+    target_model = available_models[0] 
+    for pref in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.5-flash-latest']:
+        if pref in available_models:
+            target_model = pref
+            break
             
-    raise Exception(f"API 金鑰無效或多模態模型皆無法連線，最終錯誤：{last_error}")
+    try:
+        model = genai.GenerativeModel(target_model)
+        response = model.generate_content(contents)
+        return f"*(🤖 本次成功由 `{target_model}` 模型自動分配運算)*\n\n" + response.text
+    except Exception as e:
+        raise Exception(f"使用模型 {target_model} 分析失敗！\n錯誤訊息：{str(e)}\n(伺服器回報可用模型清單：{available_models})")
 
 
 # ==========================================
