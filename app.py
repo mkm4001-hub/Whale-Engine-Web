@@ -80,6 +80,7 @@ def get_kline_charts_and_images(stock_id, target_code):
 
 
 # 🌟 回傳文字結果與確切模型版本
+# 🌟 核心升級：AI 自動尋找模型機制 (支援最新 Gemini 3.5 系列)
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
@@ -116,8 +117,14 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     if not available_models:
         raise Exception("此 API Key 沒有可用的多模態視覺模型權限。")
         
+    # 🌟 升級：將 Gemini 3.5 系列拉到最優先順位！
     target_model = available_models[0]
-    for pref in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.5-flash-latest']:
+    for pref in [
+        'models/gemini-3.8-flash',
+        'models/gemini-3.1-pro',
+        'models/gemini-1.5-flash', 
+        'models/gemini-1.5-pro'
+    ]:
         if pref in available_models:
             target_model = pref
             break
