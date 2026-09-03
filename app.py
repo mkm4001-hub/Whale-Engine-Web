@@ -93,7 +93,7 @@ def get_kline_charts_and_images(stock_id, target_code):
     # --- AI 辨識圖片繪圖函式 ---
     def make_image_for_ai(df, chart_type='candle', is_daily=False):
         if df is None or df.empty or len(df) < 5: return None
-        df_copy = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+        df_copy = df.copy()
         
         apds = []
         if is_daily:
