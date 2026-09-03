@@ -148,7 +148,7 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "111@222#!", "role": "superuser"}, 
+    "chiu": {"password": "gshock2500!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
     "chiu": {"password": "cc2468500", "role": "full"},
     "abs0401": {"password": "study01!", "role": "full"},
@@ -160,7 +160,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒 GrandMaster Whale Engine V25.2")
+        st.title("🔒巨鯨引擎 V25.2")
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
