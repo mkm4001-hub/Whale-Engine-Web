@@ -19,74 +19,111 @@ from FinMind.data import DataLoader
 from whale_engines import *
 
 # ==========================================
-# 0. 輔助函式：日K、5分K(折線) 抓取與繪圖
+# 0. 輔助函式：日K(含均價/均量)、5分K(折線) 抓取與繪圖
 # ==========================================
 def get_kline_charts_and_images(stock_id, target_code):
     tz = pytz.timezone('Asia/Taipei')
+    
+    # 🌟 新增防爬蟲：每次抓圖前隨機延遲 0.5 ~ 1.5 秒，模擬人類行為
+    time.sleep(random.uniform(0.5, 1.5))
     ticker = yf.Ticker(target_code)
     
-    df_daily = ticker.history(period="60d", interval="1d")
+    # --- 1. 抓取日 K 線 (多抓以計算均線，最後裁切近2個月) ---
+    df_daily = ticker.history(period="4mo", interval="1d")
     if not df_daily.empty and df_daily.index.tz is not None:
         df_daily.index = df_daily.index.tz_convert(tz)
+        
+        # 計算 5, 10, 20 均價與均量
+        df_daily['MA5'] = df_daily['Close'].rolling(5).mean()
+        df_daily['MA10'] = df_daily['Close'].rolling(10).mean()
+        df_daily['MA20'] = df_daily['Close'].rolling(20).mean()
+        df_daily['VMA5'] = df_daily['Volume'].rolling(5).mean()
+        df_daily['VMA10'] = df_daily['Volume'].rolling(10).mean()
+        df_daily['VMA20'] = df_daily['Volume'].rolling(20).mean()
+        
+        # 嚴格裁切出最後 60 天 (約2個月)
+        df_daily = df_daily.tail(60)
     
+    # --- 2. 抓取 5 分鐘折線圖 (自動判斷最新交易日) ---
     df_5m = ticker.history(period="5d", interval="5m")
     if not df_5m.empty and df_5m.index.tz is not None:
         df_5m.index = df_5m.index.tz_convert(tz)
+        
+        # 自動鎖定最後一個有交易的日期 (9/3 08:59 會停在 9/2；09:00 就會切到 9/3)
         unique_dates = pd.Series(df_5m.index.date).unique()
         if len(unique_dates) > 0:
             latest_day = unique_dates[-1]
             df_5m = df_5m[df_5m.index.date == latest_day]
+            # 嚴格裁切台股交易時間 09:00 ~ 13:35
             df_5m = df_5m.between_time('09:00', '13:35')
         
+    # --- 網頁 Plotly 繪圖函式 ---
     def make_plotly_chart(df, title, is_line=False):
-        if df.empty: return None
+        if df is None or df.empty: return None
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
         x_data = df.index.strftime('%Y-%m-%d %H:%M') if is_line else df.index.strftime('%Y-%m-%d')
         
         if is_line:
-            fig.add_trace(go.Scatter(
-                x=x_data, y=df['Close'], mode='lines', name='走勢', 
-                line=dict(color='#1f77b4', width=2)
-            ), row=1, col=1)
+            # 5分K折線
+            fig.add_trace(go.Scatter(x=x_data, y=df['Close'], mode='lines', name='走勢', line=dict(color='#1f77b4', width=2)), row=1, col=1)
         else:
-            fig.add_trace(go.Candlestick(
-                x=x_data, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-                name='K線', increasing_line_color='red', decreasing_line_color='green'
-            ), row=1, col=1)
+            # 日線K線與均線
+            fig.add_trace(go.Candlestick(x=x_data, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=x_data, y=df['MA5'], mode='lines', name='5MA', line=dict(color='orange', width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=x_data, y=df['MA10'], mode='lines', name='10MA', line=dict(color='blue', width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=x_data, y=df['MA20'], mode='lines', name='20MA', line=dict(color='purple', width=1.5)), row=1, col=1)
         
+        # 成交量區塊
         colors = ['red' if row['Close'] >= row['Open'] else 'green' for _, row in df.iterrows()]
-        fig.add_trace(go.Bar(
-            x=x_data, y=df['Volume'], marker_color=colors, name='成交量'
-        ), row=2, col=1)
+        fig.add_trace(go.Bar(x=x_data, y=df['Volume'], marker_color=colors, name='成交量'), row=2, col=1)
         
-        fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=400, margin=dict(l=20, r=20, t=40, b=20))
+        if not is_line:
+            # 日線均量線
+            fig.add_trace(go.Scatter(x=x_data, y=df['VMA5'], mode='lines', name='VMA5', line=dict(color='orange', width=1)), row=2, col=1)
+            fig.add_trace(go.Scatter(x=x_data, y=df['VMA10'], mode='lines', name='VMA10', line=dict(color='blue', width=1)), row=2, col=1)
+            fig.add_trace(go.Scatter(x=x_data, y=df['VMA20'], mode='lines', name='VMA20', line=dict(color='purple', width=1)), row=2, col=1)
+            
+        fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=450, margin=dict(l=20, r=20, t=40, b=20), hovermode='x unified')
         return fig
 
-    fig_daily = make_plotly_chart(df_daily, f"[{stock_id}] 近2個月 日K線圖", is_line=False)
+    fig_daily = make_plotly_chart(df_daily, f"[{stock_id}] 近2個月 日K線圖 (含5/10/20均價與均量)", is_line=False)
     fig_5m = make_plotly_chart(df_5m, f"[{stock_id}] 當日 5分鐘折線走勢圖 (09:00~13:30)", is_line=True)
 
-    def make_image_for_ai(df, chart_type='candle'):
-        if df.empty or len(df) < 5: return None
+    # --- AI 辨識圖片繪圖函式 ---
+    def make_image_for_ai(df, chart_type='candle', is_daily=False):
+        if df is None or df.empty or len(df) < 5: return None
         df_copy = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+        
+        apds = []
+        if is_daily:
+            # 給 AI 看的圖片也要加上均線
+            apds = [
+                mpf.make_addplot(df['MA5'], color='orange', width=1),
+                mpf.make_addplot(df['MA10'], color='blue', width=1),
+                mpf.make_addplot(df['MA20'], color='purple', width=1),
+                mpf.make_addplot(df['VMA5'], color='orange', width=1, panel=1),
+                mpf.make_addplot(df['VMA10'], color='blue', width=1, panel=1),
+                mpf.make_addplot(df['VMA20'], color='purple', width=1, panel=1),
+            ]
+        
         buf = io.BytesIO()
-        mpf.plot(df_copy, type=chart_type, volume=True, style='charles', savefig=dict(fname=buf, dpi=100, bbox_inches='tight'))
+        mpf.plot(df_copy, type=chart_type, volume=True, style='charles', addplot=apds, savefig=dict(fname=buf, dpi=100, bbox_inches='tight'))
         buf.seek(0)
         return Image.open(buf)
 
-    img_daily = make_image_for_ai(df_daily, chart_type='candle')
-    img_5m = make_image_for_ai(df_5m, chart_type='line')
+    img_daily = make_image_for_ai(df_daily, chart_type='candle', is_daily=True)
+    img_5m = make_image_for_ai(df_5m, chart_type='line', is_daily=False)
 
     return fig_daily, fig_5m, img_daily, img_5m
 
 
 # 🌟 回傳文字結果與確切模型版本
-# 🌟 核心升級：AI 自動尋找模型機制 (支援最新 Gemini 3.5 系列)
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合；並依照趨勢，評估隔天開盤可能股票走向，如何觀察。
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -98,7 +135,7 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     - 系統核心策略解讀：{system_info.get('strategy_profile')}
 
     【請嚴格執行長短線交叉審查並給出結論】：
-    1. 【日K中長線大局審查】：日線代表大波段趨勢與支撐壓力。圖中的均線排列、型態與量價結構，是否支持系統「{system_info.get('fish_position')}」與「{system_info.get('candidate_status')}」的研判？
+    1. 【日K中長線大局審查】：日線圖已明確標示 5MA(橘)、10MA(藍)、20MA(紫) 的均價與均量。請觀察日K線的均線排列、型態與量價結構，是否支持系統「{system_info.get('fish_position')}」與「{system_info.get('candidate_status')}」的研判？
     2. 【當日5分折線短線動能比對】：盤中 09:00 至 13:30 的分時折線走勢中，是否出現「假突破真出貨」、「拉高倒貨」或「尾盤急拉進貨」的微結構？這是否與日線趨勢產生背離？防守價 {system_info.get('defensive_price')} 在短線上是否有實質支撐？
     3. 【最終交叉核實結論】：
        - 吻合度評級：(極度吻合 / 基本吻合 / 出現背離 / 嚴重衝突)
@@ -117,14 +154,8 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     if not available_models:
         raise Exception("此 API Key 沒有可用的多模態視覺模型權限。")
         
-    # 🌟 升級：將 Gemini 3.5 系列拉到最優先順位！
     target_model = available_models[0]
-    for pref in [
-        'models/gemini-3.8-flash',
-        'models/gemini-3.1-pro',
-        'models/gemini-1.5-flash', 
-        'models/gemini-1.5-pro'
-    ]:
+    for pref in ['models/gemini-3.8-flash', 'models/gemini-3.1-pro', 'models/gemini-1.5-flash', 'models/gemini-1.5-pro']:
         if pref in available_models:
             target_model = pref
             break
@@ -153,10 +184,10 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "pwd", "role": "superuser"}, 
+    "chiu": {"password": "pwd001!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "admin1": {"password": "pwd", "role": "full"},
-    "admin2": {"password": "pwd", "role": "full"},
+    "chi01": {"password": "cc2468500", "role": "full"},
+    "abs0401": {"password": "study01!", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -165,7 +196,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒 GrandMaster Whale Engine V25.2")
+        st.title("🔒 邱專屬看盤系統")
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
@@ -233,7 +264,7 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 GrandMaster Whale Engine V25.2 PRO")
+st.title("🐋 巨鯨引擎 V25.2 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無需輸入 Token。")
 
 mode_choice = st.radio("選擇模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
@@ -321,9 +352,16 @@ if st.button("🚀 開始分析"):
                         ])
                         
                         with tab1:
-                            if fig_daily: st.plotly_chart(fig_daily, use_container_width=True)
-                            if fig_5m: st.plotly_chart(fig_5m, use_container_width=True)
-                            else: st.caption("目前無當日盤中分時資料。")
+                            # 🌟 強化顯示：無資料時跳出防呆提示
+                            if fig_daily: 
+                                st.plotly_chart(fig_daily, use_container_width=True)
+                            else: 
+                                st.warning("⚠️ 目前日K線資料不足或訊號不穩定，請稍後再試。")
+                                
+                            if fig_5m: 
+                                st.plotly_chart(fig_5m, use_container_width=True)
+                            else: 
+                                st.warning("⚠️ 尚未有當日 5 分鐘盤中資料，或訊號不穩定連線失敗。")
                             
                         with tab2:
                             st.write("### 🤖 Gemini 多模態趨勢吻合度審查")
@@ -345,7 +383,6 @@ if st.button("🚀 開始分析"):
                                         gemini_audit_result, used_model = call_gemini_audit(
                                             gemini_api_key, stock_id, system_summary, img_daily, img_5m
                                         )
-                                        # 🌟 醒目標記目前使用的 AI 版本
                                         st.success(f"🤖 **目前調用 AI 版本**：`{used_model}`")
                                         st.markdown(gemini_audit_result)
                                     except Exception as ai_err:
