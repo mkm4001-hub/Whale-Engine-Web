@@ -194,7 +194,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒 邱專屬看盤系統")
+        st.title("🔒 鯨魚系統 V25.5 PRO")
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
@@ -262,7 +262,7 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 邱神選股決策中心 V25.5 PRO")
+st.title("🐋 鯨魚系統 V25.5 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無需輸入 Token。")
 
 mode_choice = st.radio("選擇模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
