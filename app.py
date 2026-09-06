@@ -115,7 +115,7 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。隔日開盤的可能趨勢與盤中/尾盤的趨勢有可能有什麼變化，應該怎麼注意
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -182,9 +182,9 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "pwd", "role": "superuser"}, 
-    "master": {"password": "pwd", "role": "superuser"},
-    "admin1": {"password": "pwd", "role": "full"},
+    "chiu": {"password": "pwd001!", "role": "superuser"}, 
+    "chi01": {"password": "cc2468500", "role": "superuser"},
+    "abs0401": {"password": "pwd002!", "role": "full"},
     "admin2": {"password": "pwd", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
