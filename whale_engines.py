@@ -6,11 +6,12 @@ import pytz
 import math
 import time
 import random
+import os
 from FinMind.data import DataLoader
 import warnings
 warnings.filterwarnings("ignore")
 
-WHALE_VERSION = "V25.2 PRO"
+WHALE_VERSION = "V25.5 PRO"
 
 # ==========================================
 # 模組 1: WhaleTools
@@ -72,16 +73,50 @@ class WhaleTools:
 
 
 # ==========================================
-# 模組 2: DataEngine (🌟 V25.2: 擬真延遲與大盤備援)
+# 模組 2: TDCC 快取與 DataEngine (FinMind 免費版配置)
 # ==========================================
+class TDCCCacheManager:
+    def __init__(self, cache_dir):
+        self.cache_dir = cache_dir
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        self.cached_dfs = {}
+        self.load_cache_to_memory()
+
+    def load_cache_to_memory(self):
+        files = [f for f in os.listdir(self.cache_dir) if f.startswith('TDCC_') and f.endswith('.csv')]
+        if not files: return
+        for f in files:
+            path = os.path.join(self.cache_dir, f)
+            try:
+                df = pd.read_csv(path, dtype={'stock_id': str})
+                df['stock_id'] = df['stock_id'].astype(str).str.strip()
+                df['date'] = pd.to_datetime(df['date'])
+                self.cached_dfs[f] = df
+            except Exception: pass
+
+    def get_stock_data(self, stock_id):
+        if not self.cached_dfs: return pd.DataFrame()
+        dfs = []
+        target_id = str(stock_id).strip()
+        for f, df in self.cached_dfs.items():
+            stock_df = df[df['stock_id'] == target_id]
+            if not stock_df.empty: dfs.append(stock_df)
+        if dfs:
+            final_df = pd.concat(dfs)
+            return final_df.sort_values('date').reset_index(drop=True)
+        return pd.DataFrame()
+
 class DataEngine:
-    def __init__(self, dataloader=None):
+    def __init__(self, dataloader=None, tdcc_manager=None):
         if dataloader is None:
             self.dl = DataLoader()
             token = os.getenv("FINMIND_TOKEN")
-            if not token: raise RuntimeError("缺少 FINMIND_TOKEN")
-            self.dl.login_by_token(api_token=token)
+            # 💡 已移除強制 Token 驗證，若無 Token 自動走免費版 API
+            if token:
+                self.dl.login_by_token(api_token=token)
         else: self.dl = dataloader
+        self.tdcc_manager = tdcc_manager
 
     def load_stock(self, stock_id, mode='after_market'):
         tw_code = str(stock_id).strip() + ".TW"
@@ -93,19 +128,20 @@ class DataEngine:
                 ticker = yf.Ticker(tw_code)
                 df_adj = ticker.history(period="2y", auto_adjust=True)
                 df_raw = ticker.history(period="2y", auto_adjust=False)
-                if not df_adj.empty and len(df_adj) >= 10: break
+                if not df_adj.empty and len(df_adj) >= 10 and isinstance(df_adj.index, pd.DatetimeIndex): break
             except: time.sleep(1)
 
-        if df_adj.empty or len(df_adj) < 10:
+        if df_adj.empty or len(df_adj) < 10 or not isinstance(df_adj.index, pd.DatetimeIndex):
             for attempt in range(3):
                 try:
                     ticker = yf.Ticker(two_code)
                     df_adj = ticker.history(period="2y", auto_adjust=True)
                     df_raw = ticker.history(period="2y", auto_adjust=False)
-                    if not df_adj.empty and len(df_adj) >= 10: break
+                    if not df_adj.empty and len(df_adj) >= 10 and isinstance(df_adj.index, pd.DatetimeIndex): break
                 except: time.sleep(1)
 
-            if df_adj.empty: raise ValueError(f"[empty_response] 找不到股票代號或連線失敗: {stock_id}")
+            if df_adj.empty or not isinstance(df_adj.index, pd.DatetimeIndex): 
+                raise ValueError(f"[empty_response] 找不到股票代號或連線失敗: {stock_id}")
             target_code = two_code
         else: target_code = tw_code
 
@@ -114,8 +150,9 @@ class DataEngine:
             df.columns = df.columns.get_level_values(0)
             df_raw.columns = df_raw.columns.get_level_values(0)
 
-        if df.index.tz is not None:
+        if getattr(df.index, 'tz', None) is not None:
             df.index = df.index.tz_convert('Asia/Taipei').tz_localize(None)
+        if not df_raw.empty and getattr(df_raw.index, 'tz', None) is not None:
             df_raw.index = df_raw.index.tz_convert('Asia/Taipei').tz_localize(None)
 
         df = df[df["Volume"] > 0].copy()
@@ -139,8 +176,7 @@ class DataEngine:
             'tdcc_latest_date': '無資料', 'mkt_latest_date': '無資料', 'queried_at': now.strftime("%Y-%m-%d %H:%M:%S"),
             'errors': []
         }
-        rev_df = pd.DataFrame()
-        tdcc_df = pd.DataFrame()
+        rev_df, tdcc_df = pd.DataFrame(), pd.DataFrame()
 
         if mode == 'intraday':
             df['Trust_NetBuy'] = df['Foreign_NetBuy'] = df['Dealer_NetBuy'] = df['Inst_NetBuy'] = df['Margin_Balance_Raw'] = np.nan
@@ -150,7 +186,6 @@ class DataEngine:
         start_date = (now - timedelta(days=730)).strftime("%Y-%m-%d")
         fm_end_date = now.strftime("%Y-%m-%d")
 
-        # 1. 法人資料
         try:
             inst_df = self.dl.taiwan_stock_institutional_investors(stock_id=stock_id, start_date=start_date, end_date=fm_end_date)
             if not inst_df.empty:
@@ -177,10 +212,8 @@ class DataEngine:
                 df['Inst_NetBuy'] = df['Trust_NetBuy'] + df['Foreign_NetBuy'] + df['Dealer_NetBuy']
 
                 date_strs = inst_df['date'].dt.strftime("%Y-%m-%d")
-                if latest_price_date in date_strs.values:
-                    data_quality['inst_state'] = 'complete'
-                else:
-                    data_quality['inst_state'] = 'stale'
+                if latest_price_date in date_strs.values: data_quality['inst_state'] = 'complete'
+                else: data_quality['inst_state'] = 'stale'
             else:
                 data_quality['inst_state'] = 'empty_response'
                 df['Trust_NetBuy'] = df['Foreign_NetBuy'] = df['Dealer_NetBuy'] = df['Inst_NetBuy'] = np.nan
@@ -188,9 +221,8 @@ class DataEngine:
             data_quality['inst_state'] = 'network_error'
             df['Trust_NetBuy'] = df['Foreign_NetBuy'] = df['Dealer_NetBuy'] = df['Inst_NetBuy'] = np.nan
 
-        time.sleep(random.uniform(0.2, 0.6)) # 防火牆緩衝
+        time.sleep(random.uniform(0.3, 0.7))
 
-        # 2. 融資資料
         try:
             margin_df = self.dl.taiwan_stock_margin_purchase_short_sale(stock_id=stock_id, start_date=start_date, end_date=fm_end_date)
             if not margin_df.empty and "MarginPurchaseTodayBalance" in margin_df.columns:
@@ -207,168 +239,104 @@ class DataEngine:
             data_quality['margin_state'] = 'network_error'
             df['Margin_Balance_Raw'] = np.nan
 
-        time.sleep(random.uniform(0.2, 0.6)) # 防火牆緩衝
+        time.sleep(random.uniform(0.3, 0.7))
 
-        # 3. 營收資料
         try:
             rev_start = (now - timedelta(days=365*4)).strftime("%Y-%m-%d")
             rev_df_raw = self.dl.taiwan_stock_month_revenue(stock_id=stock_id, start_date=rev_start, end_date=fm_end_date)
             if not rev_df_raw.empty:
                 rev_df_raw['date'] = pd.to_datetime(rev_df_raw['date'])
                 rev_df = rev_df_raw.sort_values('date').drop_duplicates(subset=['date']).reset_index(drop=True)
-                latest_rev_year = rev_df.iloc[-1]['revenue_year']
-                latest_rev_month = rev_df.iloc[-1]['revenue_month']
-                data_quality['revenue_latest_date'] = f"{latest_rev_year}-{latest_rev_month:02d}"
-        except Exception as e:
-            pass
+                data_quality['revenue_latest_date'] = f"{rev_df.iloc[-1]['revenue_year']}-{rev_df.iloc[-1]['revenue_month']:02d}"
+        except Exception: pass
 
-        time.sleep(random.uniform(0.2, 0.6)) # 防火牆緩衝
-
-        # 4. 集保戶股權分散表 (TDCC)
         try:
-            tdcc_start = (now - timedelta(days=180)).strftime("%Y-%m-%d")
-            tdcc_raw = self.dl.taiwan_stock_holding_shares_per(stock_id=stock_id, start_date=tdcc_start, end_date=fm_end_date)
-
-            if tdcc_raw is not None and not tdcc_raw.empty:
-                cols_lower = [c.lower() for c in tdcc_raw.columns]
-                tdcc_raw.columns = cols_lower
-
-                if 'holdingshareslevel' in cols_lower: lvl_col = 'holdingshareslevel'
-                elif 'size' in cols_lower: lvl_col = 'size'
-                else: lvl_col = cols_lower[2]
-
-                tdcc_raw['date'] = pd.to_datetime(tdcc_raw['date'])
-                tdcc_raw['level'] = tdcc_raw[lvl_col].astype(str).str.strip()
-
-                tdcc_raw['hold_shares'] = pd.to_numeric(tdcc_raw['hold_shares'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-                tdcc_raw['percent'] = pd.to_numeric(tdcc_raw['percent'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
-                grouped = tdcc_raw.groupby('date')
-                records = []
-
-                for d, grp in grouped:
-                    valid_levels = [str(i) for i in range(1, 16)]
-                    total_shares = grp[grp['level'].isin(valid_levels)]['hold_shares'].sum()
-
-                    if total_shares == 0: continue
-
-                    retail_levels = [str(i) for i in range(1, 10)]
-                    retail_pct = grp[grp['level'].isin(retail_levels)]['percent'].sum()
-
-                    cap_size = 'Small_Cap' if total_shares < 200000000 else 'Large_Cap'
-
-                    if cap_size == 'Small_Cap':
-                        whale_pct = grp[grp['level'].isin(['12','13','14','15'])]['percent'].sum()
-                    else:
-                        whale_pct = grp[grp['level'].isin(['15'])]['percent'].sum()
-
-                    records.append({
-                        'date': d, 'Total_Shares': total_shares, 'Cap_Size': cap_size,
-                        'Retail_Pct': retail_pct, 'Whale_Pct': whale_pct
-                    })
-
-                if records:
-                    tdcc_df = pd.DataFrame(records).sort_values('date').reset_index(drop=True)
-                    data_quality['tdcc_latest_date'] = tdcc_df.iloc[-1]['date'].strftime("%Y-%m-%d")
-                else:
-                    data_quality['errors'].append("[TDCC] 級距解析後無有效記錄")
-            else:
-                data_quality['errors'].append("[TDCC] API回傳空表或無資料")
-        except Exception as e:
-            data_quality['errors'].append(f"[TDCC_Error] 集保解析例外: {str(e)}")
+            if self.tdcc_manager:
+                tdcc_raw = self.tdcc_manager.get_stock_data(stock_id)
+                if tdcc_raw is not None and not tdcc_raw.empty:
+                    tdcc_raw['level'] = tdcc_raw['level'].astype(str).str.strip()
+                    grouped = tdcc_raw.groupby('date')
+                    records = []
+                    for d, grp in grouped:
+                        valid_levels = [str(i) for i in range(1, 16)]
+                        total_shares = grp[grp['level'].isin(valid_levels)]['hold_shares'].sum()
+                        if total_shares == 0: continue
+                        retail_pct = grp[grp['level'].isin([str(i) for i in range(1, 10)])]['percent'].sum()
+                        cap_size = 'Small_Cap' if total_shares < 200000000 else 'Large_Cap'
+                        whale_pct = grp[grp['level'].isin(['12','13','14','15'])]['percent'].sum() if cap_size == 'Small_Cap' else grp[grp['level'].isin(['15'])]['percent'].sum()
+                        records.append({'date': d, 'Total_Shares': total_shares, 'Cap_Size': cap_size, 'Retail_Pct': retail_pct, 'Whale_Pct': whale_pct})
+                    if records:
+                        tdcc_df = pd.DataFrame(records).sort_values('date').reset_index(drop=True)
+                        data_quality['tdcc_latest_date'] = tdcc_df.iloc[-1]['date'].strftime("%Y-%m-%d")
+        except Exception: pass
 
         return df, target_code, data_quality, rev_df, tdcc_df
 
     def load_market(self, target_code, latest_stock_date):
-        # 🌟 V25.2 強化：OTC 指數斷更備援機制
         mkt_ticker = "^TWOII" if target_code.endswith(".TWO") else "^TWII"
         mkt = yf.Ticker(mkt_ticker).history(period="2y", auto_adjust=True)
 
-        if mkt is not None and not mkt.empty and mkt.index.tz is not None:
-            mkt.index = mkt.index.tz_convert('Asia/Taipei').tz_localize(None)
+        if mkt is not None and not mkt.empty and isinstance(mkt.index, pd.DatetimeIndex):
+            if getattr(mkt.index, 'tz', None) is not None:
+                mkt.index = mkt.index.tz_convert('Asia/Taipei').tz_localize(None)
 
         if mkt_ticker == "^TWOII":
-            if mkt is None or mkt.empty or mkt.index[-1].strftime("%Y-%m-%d") < latest_stock_date:
+            if mkt is None or mkt.empty or not isinstance(mkt.index, pd.DatetimeIndex) or mkt.index[-1].strftime("%Y-%m-%d") < latest_stock_date:
                 mkt = yf.Ticker("^TWII").history(period="2y", auto_adjust=True)
-                if mkt is not None and not mkt.empty and mkt.index.tz is not None:
-                    mkt.index = mkt.index.tz_convert('Asia/Taipei').tz_localize(None)
+                if mkt is not None and not mkt.empty and isinstance(mkt.index, pd.DatetimeIndex):
+                    if getattr(mkt.index, 'tz', None) is not None:
+                        mkt.index = mkt.index.tz_convert('Asia/Taipei').tz_localize(None)
 
-        if mkt is None or mkt.empty:
-            raise ValueError("[empty_response] 大盤資料獲取失敗或回傳空表")
+        if mkt is None or mkt.empty or not isinstance(mkt.index, pd.DatetimeIndex):
+            raise ValueError("[empty_response] 大盤資料獲取失敗或回傳無效日期格式")
         if isinstance(mkt.columns, pd.MultiIndex): mkt.columns = mkt.columns.get_level_values(0)
-
         return mkt[mkt["Close"] > 0].copy()
 
     def prepare_indicators(self, df, mkt):
-        df["MA5"] = df["Close"].rolling(5, min_periods=1).mean()
-        df["MA10"] = df["Close"].rolling(10, min_periods=1).mean()
-        df["MA20"] = df["Close"].rolling(20, min_periods=1).mean()
-        df["MA60"] = df["Close"].rolling(60, min_periods=1).mean()
-
-        df["VOL5"] = df["Volume"].rolling(5, min_periods=1).mean()
-        df["VOL20"] = df["Volume"].rolling(20, min_periods=1).mean()
-        df["VOL5_PRIOR"] = df["Volume"].shift(1).rolling(5, min_periods=1).mean()
-        df["VOL20_PRIOR"] = df["Volume"].shift(1).rolling(20, min_periods=1).mean()
-
+        df["MA5"], df["MA10"], df["MA20"], df["MA60"] = df["Close"].rolling(5).mean(), df["Close"].rolling(10).mean(), df["Close"].rolling(20).mean(), df["Close"].rolling(60).mean()
+        df["VOL5"], df["VOL20"] = df["Volume"].rolling(5).mean(), df["Volume"].rolling(20).mean()
+        df["VOL5_PRIOR"], df["VOL20_PRIOR"] = df["Volume"].shift(1).rolling(5).mean(), df["Volume"].shift(1).rolling(20).mean()
         df["Typical_Price"] = (df["High"] + df["Low"] + df["Close"]) / 3
         df["VWAP60"] = WhaleTools.calculate_vwap60(df)
         df["OBV"] = WhaleTools.calculate_obv(df)
-
-        df["STD20"] = df["Close"].rolling(20, min_periods=1).std().fillna(0)
-        df["UpperBB"] = df["MA20"] + 2 * df["STD20"]
-        df["LowerBB"] = df["MA20"] - 2 * df["STD20"]
+        df["STD20"] = df["Close"].rolling(20).std().fillna(0)
+        df["UpperBB"], df["LowerBB"] = df["MA20"] + 2 * df["STD20"], df["MA20"] - 2 * df["STD20"]
         df["Bandwidth"] = np.where(df["MA20"] == 0, 0, (df["UpperBB"] - df["LowerBB"]) / df["MA20"])
-
-        df["EMA12"] = df["Close"].ewm(span=12, adjust=False).mean()
-        df["EMA26"] = df["Close"].ewm(span=26, adjust=False).mean()
+        df["EMA12"], df["EMA26"] = df["Close"].ewm(span=12, adjust=False).mean(), df["Close"].ewm(span=26, adjust=False).mean()
         df["MACD_Hist"] = df["EMA12"] - df["EMA26"] - (df["EMA12"] - df["EMA26"]).ewm(span=9, adjust=False).mean()
-
         df['Prev_Close_Adj'] = df['Close'].shift(1)
-        tr1 = df['High'] - df['Low']
-        tr2 = (df['High'] - df['Prev_Close_Adj']).abs()
-        tr3 = (df['Low'] - df['Prev_Close_Adj']).abs()
-        df['ATR14'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(14, min_periods=1).mean()
+        df['ATR14'] = pd.concat([df['High'] - df['Low'], (df['High'] - df['Prev_Close_Adj']).abs(), (df['Low'] - df['Prev_Close_Adj']).abs()], axis=1).max(axis=1).rolling(14).mean()
 
         high_low_diff = df["High"] - df["Low"]
-        vsa_raw = (df["Volume"] / df["VOL20_PRIOR"].replace(0, 1).fillna(1)) / (high_low_diff / df["ATR14"].replace(0, 0.01)).replace(0, 0.01)
-        df["VSA_Ratio"] = np.where(high_low_diff == 0, 0.0, vsa_raw)
+        df["VSA_Ratio"] = np.where(high_low_diff == 0, 0.0, (df["Volume"] / df["VOL20_PRIOR"].replace(0, 1).fillna(1)) / (high_low_diff / df["ATR14"].replace(0, 0.01)).replace(0, 0.01))
         df["VSA_Ratio"] = df["VSA_Ratio"].replace([np.inf, -np.inf], 0.0).fillna(0)
-
         clv = np.where(high_low_diff == 0, 0.0, ((df["Close"] - df["Low"]) - (df["High"] - df["Close"])) / high_low_diff)
-        df["CMF"] = (clv * df["Volume"]).rolling(20, min_periods=1).sum() / df["Volume"].rolling(20, min_periods=1).sum().replace(0, 1)
+        df["CMF"] = (clv * df["Volume"]).rolling(20).sum() / df["Volume"].rolling(20).sum().replace(0, 1)
 
         vol_factor = WhaleTools.get_vol_factor(df)
         ma20_slope = WhaleTools.calculate_slope(df["MA20"], period=5, scale=50, adaptive_factor=vol_factor)
 
         common_idx = df.index.intersection(mkt.index)
-        market_factor = 1.0
-        mkt_latest_date = mkt.index[-1].strftime("%Y-%m-%d")
+        market_factor, mkt_latest_date = 1.0, mkt.index[-1].strftime("%Y-%m-%d")
 
         if len(common_idx) > 0:
-            if df.index[-1] != mkt.index[-1]:
-                rs20, rs60, market_status = 0.0, 0.0, "Stale"
+            if df.index[-1] != mkt.index[-1]: rs20, rs60, market_status = 0.0, 0.0, "Stale"
             else:
                 rs20 = WhaleTools.calculate_rs(df.loc[common_idx, "Close"], mkt.loc[common_idx, "Close"], period=20)
                 rs60 = WhaleTools.calculate_rs(df.loc[common_idx, "Close"], mkt.loc[common_idx, "Close"], period=60)
                 mkt["MA20"] = mkt["Close"].rolling(20, min_periods=1).mean()
                 market_factor = WhaleTools.get_market_adaptive_factor(mkt)
                 mkt_slope = WhaleTools.calculate_slope(mkt["MA20"], period=5, scale=50, adaptive_factor=market_factor)
-
                 if (mkt["Close"].loc[common_idx].iloc[-1] > mkt["MA20"].loc[common_idx].iloc[-1] and mkt_slope > 0): market_status = "Bull"
                 elif (mkt["Close"].loc[common_idx].iloc[-1] < mkt["MA20"].loc[common_idx].iloc[-1] and mkt_slope < 0): market_status = "Bear"
                 else: market_status = "Neutral"
-        else:
-            rs20, rs60, market_status = 0.0, 0.0, "Unknown"
+        else: rs20, rs60, market_status = 0.0, 0.0, "Unknown"
 
-        return {
-            "df": df, "mkt": mkt, "rs20": rs20, "rs60": rs60,
-            "vol_factor": vol_factor, "ma20_slope": ma20_slope, "market_status": market_status,
-            "market_factor": market_factor, "mkt_latest_date": mkt_latest_date
-        }
+        return {"df": df, "mkt": mkt, "rs20": rs20, "rs60": rs60, "vol_factor": vol_factor, "ma20_slope": ma20_slope, "market_status": market_status, "market_factor": market_factor, "mkt_latest_date": mkt_latest_date}
 
 
 # ==========================================
-# 模組 3: FishScoreEngine (🌟 V25.2: 1億流動性防呆)
+# 模組 3: FishScoreEngine
 # ==========================================
 class FishScoreEngine:
     def calculate(self, data, custom_params=None):
@@ -376,9 +344,7 @@ class FishScoreEngine:
         df = data["df"]
         latest = df.iloc[-1]
         market_factor = data.get("market_factor", 1.0)
-        score = 0
-        health_checks = []
-        has_error = False
+        score, health_checks, has_error = 0, [], False
 
         trend_score = 0
         if latest["Close"] > latest["MA20"]:
@@ -401,17 +367,22 @@ class FishScoreEngine:
         rs20, rs60 = data["rs20"], data["rs60"]
         rs_limit_high = custom_params.get("rs_limit_high", 0.10) * market_factor
         rs_limit_mid = (rs_limit_high / 2.0)
+
         if rs20 > rs_limit_high: rs_score += 10
         elif rs20 > rs_limit_mid: rs_score += 7
         elif rs20 > 0: rs_score += 4
+        elif data["market_status"] == "Bull" and latest["Close"] > latest["MA20"]: rs_score -= 5
+        else: rs_score -= 10
 
         if rs60 > rs_limit_high: rs_score += 10
         elif rs60 > rs_limit_mid: rs_score += 7
         elif rs60 > 0: rs_score += 4
+        elif data["market_status"] == "Bull" and latest["Close"] > latest["MA60"]: rs_score -= 5
+        else: rs_score -= 10
 
         health_checks.append(("RS20 > 0 (動態門檻校準)", rs20 > 0))
         health_checks.append(("RS60 > 0", rs60 > 0))
-        score += rs_score
+        score += max(0, rs_score + 20)
 
         vwap_score = 0
         if latest["Close"] > latest["VWAP60"]:
@@ -424,15 +395,15 @@ class FishScoreEngine:
         score += vwap_score
 
         try:
-            prev_bandwidth_min = df["Bandwidth"].shift(1).tail(20).min()
+            mean_bandwidth = df["Bandwidth"].shift(1).tail(20).mean()
             prev_bandwidth = df["Bandwidth"].shift(1).iloc[-1]
-            is_bb_squeeze = prev_bandwidth <= (prev_bandwidth_min * 1.05) if prev_bandwidth_min > 0 else False
-            if is_bb_squeeze and latest["Close"] > df["UpperBB"].shift(1).iloc[-1]:
+            is_bb_squeeze = prev_bandwidth <= (mean_bandwidth * 0.85) if mean_bandwidth > 0 else False
+            if is_bb_squeeze and latest["Close"] > latest["MA20"]:
                 score += 15
-                health_checks.append(("布林極限壓縮後突破上軌", True))
-            else: health_checks.append(("布林極限壓縮後突破上軌", False))
+                health_checks.append(("布林極限壓縮後突破發動", True))
+            else: health_checks.append(("布林極限壓縮後突破發動", False))
         except Exception:
-            health_checks.append(("布林極限壓縮後突破上軌", "Error"))
+            health_checks.append(("布林極限壓縮後突破發動", "Error"))
             has_error = True
 
         volume_score = 0
@@ -456,8 +427,7 @@ class FishScoreEngine:
         elif market_status in ["Unknown", "Stale"]:
             health_checks.append(("大盤濾網(資料缺失/過舊)", "Error"))
             has_error = True
-        else:
-            health_checks.append(("大盤濾網(空頭)", False))
+        else: health_checks.append(("大盤濾網(空頭)", False))
 
         if latest["Close"] * prev_vol20 > 100000000:
             score += 10
@@ -467,19 +437,13 @@ class FishScoreEngine:
         score = min(100, max(0, score))
         grade = "S" if score >= 90 else "A" if score >= 80 else "B" if score >= 70 else "C" if score >= 60 else "D"
         trend_status = "強勢" if trend_score >= 25 else "整理" if trend_score >= 15 else "轉弱"
-        rs_status = "相對大盤強勢" if rs_score >= 14 else "與大盤同步" if rs_score >= 7 else "相對弱勢"
+        rs_status = "相對大盤強勢" if rs_score >= 14 else "與大盤同步" if rs_score >= 0 else "相對弱勢"
         chip_status = "換手安定" if vwap_score >= 10 else "換手震盪" if vwap_score >= 5 else "鬆動"
 
         error_details = []
-        if has_error:
-            error_details.append(f"[Fish_Error] 大盤狀態 {market_status} 或布林通道運算失敗")
+        if has_error: error_details.append(f"[Fish_Error] 大盤狀態 {market_status} 或布林通道運算失敗")
 
-        return {
-            "fish_score": round(score), "health_grade": grade,
-            "trend_status": trend_status, "rs_status": rs_status, "chip_status": chip_status,
-            "health_checks": health_checks, "has_error": has_error, "error_details": error_details
-        }
-
+        return {"fish_score": round(score), "health_grade": grade, "trend_status": trend_status, "rs_status": rs_status, "chip_status": chip_status, "health_checks": health_checks, "has_error": has_error, "error_details": error_details}
 
 # ==========================================
 # 模組 4: RetreatScoreEngine
@@ -630,7 +594,6 @@ class RetreatScoreEngine:
             error_details.append(f"[Retreat_Drop] {str(e)}")
 
         grp3_score = min(50, grp3_score)
-
         retreat_score = min(100, grp1_score + grp2_score + grp3_score)
 
         has_error = len(error_details) > 0
@@ -641,19 +604,7 @@ class RetreatScoreEngine:
         elif retreat_score >= 20: risk_status = "提高警覺"
         else: risk_status = "低"
 
-        if has_error: retreat_comment = "安全模組計算發生異常，防禦失效"
-        elif retreat_score >= 80: retreat_comment = "主力撤退訊號明顯,建議盡速避險"
-        elif retreat_score >= 60: retreat_comment = "疑似開始出貨,建議密切觀察"
-        elif retreat_score >= 40: retreat_comment = "籌碼有鬆動跡象,提防拉高倒貨"
-        elif retreat_score >= 20: retreat_comment = "部分撤退訊號出現,需提高警覺"
-        else: retreat_comment = "尚未發現嚴重出貨訊號"
-
-        return {
-            "retreat_score": round(retreat_score), "risk_status": risk_status,
-            "retreat_comment": retreat_comment, "retreat_checks": retreat_checks,
-            "has_error": has_error, "error_details": error_details
-        }
-
+        return {"retreat_score": round(retreat_score), "risk_status": risk_status, "retreat_checks": retreat_checks, "has_error": has_error, "error_details": error_details}
 
 # ==========================================
 # 模組 5: WhaleEnduranceEngine
@@ -690,11 +641,11 @@ class WhaleEnduranceEngine:
                  messages.append("[型態代理] 弱勢跌停一字線(極度恐慌)")
             elif is_limit_up:
                 if latest['Volume'] < (df['VOL5_PRIOR'].iloc[-1] * 0.7):
-                    score += 10
-                    messages.append("[型態代理] 漲停量縮鎖死(籌碼安定)")
+                    score += 15
+                    messages.append("[型態代理] 漲停量縮鎖死(籌碼極度安定)")
                 else:
-                    score -= 15
-                    messages.append("[型態代理] 量價背離(上漲無量,續航力存疑)")
+                    score += 10
+                    messages.append("[型態代理] 放量換手漲停(攻擊動能強勁)")
 
             avg_range = (df['Raw_High'] - df['Raw_Low']).tail(5).mean()
             if avg_range > 0 and day_range < (avg_range * 0.6) and latest['Volume'] < df['VOL20_PRIOR'].iloc[-1]:
@@ -746,11 +697,7 @@ class WhaleEnduranceEngine:
         elif score >= 40: status = "動能衰退(高位背離)"
         else: status = "燃料耗盡(賣壓湧現)"
 
-        return {
-            "endurance_score": round(score), "endurance_status": status, "endurance_messages": messages,
-            "has_error": has_error, "error_details": error_details
-        }
-
+        return {"endurance_score": round(score), "endurance_status": status, "endurance_messages": messages, "has_error": has_error, "error_details": error_details}
 
 # ==========================================
 # 模組 6: FundamentalEngine
@@ -758,21 +705,13 @@ class WhaleEnduranceEngine:
 class FundamentalEngine:
     def calculate(self, rev_df, current_date):
         if rev_df is None or rev_df.empty:
-            return {
-                "fund_score": 0, "fund_label": "【無營收資料】",
-                "yoy": 0, "mom": 0, "is_high": False, "fund_state": "missing",
-                "is_pit_embargo": False
-            }
+            return {"fund_score": 0, "fund_label": "【無營收資料】", "yoy": 0, "mom": 0, "is_high": False, "fund_state": "missing", "is_pit_embargo": False}
 
         rev_df['revenue'] = pd.to_numeric(rev_df['revenue'], errors='coerce')
         rev_df = rev_df.dropna(subset=['revenue'])
 
         if len(rev_df) < 2:
-            return {
-                "fund_score": 0, "fund_label": "【營收資料不足】",
-                "yoy": 0, "mom": 0, "is_high": False, "fund_state": "insufficient",
-                "is_pit_embargo": False
-            }
+            return {"fund_score": 0, "fund_label": "【營收資料不足】", "yoy": 0, "mom": 0, "is_high": False, "fund_state": "insufficient", "is_pit_embargo": False}
 
         latest_rev = rev_df.iloc[-1]['revenue']
         prev_rev = rev_df.iloc[-2]['revenue']
@@ -784,7 +723,7 @@ class FundamentalEngine:
         is_stale = months_diff > 2
 
         is_pit_embargo = False
-        if current_dt.day <= 10 and months_diff == 1:
+        if current_dt.day <= 10 and months_diff in [1, 2]:
             is_pit_embargo = True
 
         last_year_df = rev_df[(rev_df['revenue_year'] == latest_year - 1) & (rev_df['revenue_month'] == latest_month)]
@@ -804,14 +743,12 @@ class FundamentalEngine:
 
         is_mom_valid = (expected_prev_month == actual_prev_month and expected_prev_year == actual_prev_year)
 
-        if is_mom_valid and prev_rev > 0:
-            mom = ((latest_rev - prev_rev) / prev_rev) * 100
+        if is_mom_valid and prev_rev > 0: mom = ((latest_rev - prev_rev) / prev_rev) * 100
 
         is_high = False
         if len(rev_df) > 0:
             recent_max = rev_df['revenue'].tail(24).max()
-            if latest_rev >= recent_max * 0.99:
-                is_high = True
+            if latest_rev >= recent_max * 0.99: is_high = True
 
         score = 0
         if yoy >= 30: score += 20
@@ -839,42 +776,27 @@ class FundamentalEngine:
         if is_stale:
             fund_label = f"【營收資料過舊】(最後更新 {latest_year}/{latest_month})"
             fund_state = "stale"
-            score = 0
-            is_dual_growth = False
+            score, is_dual_growth = 0, False
         elif not has_yoy or not is_mom_valid:
             fund_label = f"【營收期間不連續/不足】({'+'.join(label_parts)})"
             fund_state = "insufficient"
-            score = 0
-            is_dual_growth = False
+            score, is_dual_growth = 0, False
         else:
             fund_state = "complete"
-            if is_dual_growth and yoy >= 10:
-                fund_label = f"【營收雙增護體】{embargo_warn}({'+'.join(label_parts)})"
+            if is_dual_growth and yoy >= 10: fund_label = f"【營收雙增護體】{embargo_warn}({'+'.join(label_parts)})"
             elif yoy >= 10:
                 mom_str = "MoM回落" if mom <= 0 else ""
                 fund_label = f"【YoY成長，{mom_str}】{embargo_warn}({'+'.join(label_parts)})"
-            elif yoy < 0 and mom > 0:
-                fund_label = f"【谷底回溫/轉機】{embargo_warn}({'+'.join(label_parts)})"
-            else:
-                fund_label = f"【營收動能疲弱】{embargo_warn}({'+'.join(label_parts)})"
+            elif yoy < 0 and mom > 0: fund_label = f"【谷底回溫/轉機】{embargo_warn}({'+'.join(label_parts)})"
+            else: fund_label = f"【營收動能疲弱】{embargo_warn}({'+'.join(label_parts)})"
 
-        return {
-            "fund_score": min(40, score),
-            "fund_label": fund_label,
-            "yoy": round(yoy, 2) if has_yoy else "N/A",
-            "mom": round(mom, 2) if is_mom_valid else "N/A",
-            "is_high": is_high,
-            "is_dual_growth": is_dual_growth,
-            "fund_state": fund_state,
-            "is_pit_embargo": is_pit_embargo
-        }
-
+        return {"fund_score": min(40, score), "fund_label": fund_label, "yoy": round(yoy, 2) if has_yoy else "N/A", "mom": round(mom, 2) if is_mom_valid else "N/A", "is_high": is_high, "is_dual_growth": is_dual_growth, "fund_state": fund_state, "is_pit_embargo": is_pit_embargo}
 
 # ==========================================
-# 模組 7: FishPositionEngine (🌟 V25.2: 動態防守與目標價)
+# 模組 7: FishPositionEngine
 # ==========================================
 class FishPositionEngine:
-    def calculate(self, data, fish, retreat, warning, endurance, defense, fundamental):
+    def calculate(self, data, fish, retreat, warning, endurance, defense, fundamental, chip_data, chip_xray):
         df = data["df"]
         latest = df.iloc[-1]
         prev = df.iloc[-2]
@@ -883,6 +805,7 @@ class FishPositionEngine:
         retreat_score = retreat["retreat_score"]
         warning_score = warning["warning_score"]
         rs20, rs60, slope = data['rs20'], data["rs60"], data["ma20_slope"]
+        chip_score = chip_data.get("chip_score", 0)
 
         fund_score = fundamental.get("fund_score", 0)
         is_dual_growth = fundamental.get("is_dual_growth", False)
@@ -895,18 +818,12 @@ class FishPositionEngine:
         data_layer_errors = len(fatal_errors) > 0
 
         has_sys_error = (
-            data_layer_errors or
-            fish.get("has_error", False) or
-            retreat.get("has_error", False) or
-            warning.get("has_error", False) or
-            endurance.get("has_error", False) or
-            defense.get("has_error", False)
+            data_layer_errors or fish.get("has_error", False) or retreat.get("has_error", False) or
+            warning.get("has_error", False) or endurance.get("has_error", False) or defense.get("has_error", False)
         )
 
         try: bias20 = ((latest["Close"] - latest["MA20"]) / latest["MA20"]) * 100
-        except Exception as e:
-            bias20 = 0
-            has_sys_error = True
+        except Exception: bias20, has_sys_error = 0, True
 
         if retreat_score >= 80: position, progress = "魚尾區", 85
         elif retreat_score >= 60: position, progress = "出貨區", 100
@@ -915,15 +832,15 @@ class FishPositionEngine:
         elif fish_score >= 70 and slope > 1: position, progress = "魚頭形成期", 30
         else: position, progress = "築底階段", 10
 
-        if progress <= 30: base_score = 40
-        elif progress == 50: base_score = 60
-        elif progress == 70: base_score = 30
-        else: base_score = 10
+        base_score = 40 if progress <= 30 else 60 if progress == 50 else 30 if progress == 70 else 10
+        opportunity_score = min(100, base_score + fund_score) if progress >= 30 else base_score
 
-        if progress >= 30: opportunity_score = min(100, base_score + fund_score)
-        else: opportunity_score = base_score
+        if chip_xray.get("is_surge", False):
+            opportunity_score = min(100, opportunity_score + 10)
 
-        tech_veto = (fish_score < 60 or retreat_score >= 40 or warning_score >= 30)
+        has_immunity = is_dual_growth and (chip_score >= 10)
+        veto_threshold = 55 if has_immunity else 60
+        tech_veto = (fish_score < veto_threshold or retreat_score >= 40 or warning_score >= 40)
 
         data_quality = data.get("data_quality", {})
         inst_state = data_quality.get('inst_state', 'missing')
@@ -932,54 +849,28 @@ class FishPositionEngine:
         fund_state = fundamental.get('fund_state', 'missing')
         is_intraday = data_quality.get('is_intraday', False)
 
-        margin_warning_valid = False
         margin_streak = 0
-        is_margin_complete_3d = False
-
         if margin_state == 'complete':
-            recent_3_margin = df['Margin_Balance_Raw'].dropna().tail(3)
-            if len(recent_3_margin) == 3 and (recent_3_margin.index == df.index[-3:]).all():
-                margin_warning_valid = True
-                is_margin_complete_3d = True
-
             valid_margin = df['Margin_Balance_Raw'].dropna()
             if len(valid_margin) > 1:
-                diffs = valid_margin.diff().dropna()
-                for val in diffs.iloc[::-1]:
+                for val in valid_margin.diff().dropna().iloc[::-1]:
                     if val > 0: margin_streak += 1
                     else: break
 
-        if not margin_warning_valid: margin_streak = 0
-
-        is_inst_complete = (inst_state == 'complete')
-        is_inst_partial = (inst_state == 'partial')
-
-        k_date = data_quality.get('latest_price_date')
-        i_date = data_quality.get('inst_latest_date')
-        m_date = data_quality.get('margin_latest_date')
-        latest_market_date = data_quality.get('mkt_latest_date', '無')
-
         is_fresh_and_complete = (
-            is_inst_complete and
-            is_margin_complete_3d and
-            (fund_state == 'complete') and
-            (market_status not in ['Unknown', 'Stale']) and
-            (k_date == i_date == m_date == latest_market_date)
+            inst_state == 'complete' and margin_state == 'complete' and fund_state == 'complete' and
+            market_status not in ['Unknown', 'Stale'] and
+            data_quality.get('latest_price_date') == data_quality.get('mkt_latest_date')
         )
 
         missing_msg = []
-        if is_inst_partial: missing_msg.extend(data_quality.get('missing_inst_parts', []))
-        if not is_margin_complete_3d: missing_msg.append("融資不連貫")
+        if inst_state == 'partial': missing_msg.extend(data_quality.get('missing_inst_parts', []))
+        if margin_state != 'complete': missing_msg.append("融資不連貫")
         if fund_state != 'complete': missing_msg.append("營收異常或過舊")
-        if market_status in ['Unknown', 'Stale']: missing_msg.append("大盤狀態異常")
-        if k_date != latest_market_date or i_date != latest_market_date or m_date != latest_market_date:
-            missing_msg.append("基準日未對齊大盤")
-
         missing_str = "缺" + "+".join(missing_msg) if missing_msg else "資料齊全"
         margin_str = f"(融資連買{margin_streak}天)" if margin_streak > 0 else ""
 
-        if not is_fresh_and_complete and opportunity_score > 0:
-            opportunity_score = int(opportunity_score * 0.5)
+        if not is_fresh_and_complete and opportunity_score > 0: opportunity_score = int(opportunity_score * 0.5)
 
         if opportunity_score >= 80: opportunity_level = "*****"
         elif opportunity_score >= 60: opportunity_level = "****"
@@ -992,110 +883,77 @@ class FishPositionEngine:
 
         position_comment = ""
         if has_sys_error:
-            candidate_status = "觀察 - 系統計算異常"
-            opportunity_score = 0
-            opportunity_level = "-"
+            candidate_status, opportunity_score, opportunity_level = "觀察 - 系統計算異常", 0, "-"
             position_comment = "底層安全模組例外，系統強制拒絕評估"
         elif tech_veto:
-            candidate_status = "排除"
-            opportunity_score = 0
-            opportunity_level = "-"
+            candidate_status, opportunity_score, opportunity_level = "排除", 0, "-"
             position_comment = "風險閘門未通過，不列入候選"
-        elif is_intraday or inst_state in ['missing', 'schema_error', 'error']:
-            candidate_status = "技術觀察(缺資料)"
-            opportunity_score = 0
-            opportunity_level = "-"
-            position_comment = "剛脫離整理區,仍在築底階段" if progress <= 20 else "魚頭形成中,適合開始觀察"
-            if progress > 40: position_comment = "技術趨勢成型,適合開始觀察"
-            position_comment += " [缺乏當日籌碼]"
         else:
-            if is_fresh_and_complete:
-                candidate_status = "候選 - 完整大局"
-            else:
-                candidate_status = "觀察 - 籌碼/基本面未齊"
-
+            candidate_status = "候選 - 完整大局" if is_fresh_and_complete else "觀察 - 籌碼/基本面未齊"
             if progress <= 20: position_comment = "剛脫離整理區,仍在築底階段"
             elif progress <= 40: position_comment = "魚頭形成中,適合開始觀察"
             elif progress <= 60: position_comment = "進入主升初期,趨勢開始加速"
             elif progress <= 80: position_comment = "主升中後段,報酬與風險同步增加"
-            elif progress <= 90: position_comment = "魚尾區,追價風險提高"
-            else: position_comment = "疑似出貨區,需提高警覺"
-
+            else: position_comment = "魚尾或出貨區,追價風險極高"
             position_comment = f"【{candidate_status}】 [{missing_str}] {margin_str} " + position_comment
 
         current_price_adj = float(latest["Close"])
         current_price_raw = float(latest.get("Raw_Close", current_price_adj))
         atr14 = float(latest.get("ATR14", current_price_adj * 0.03))
-
-        vwap_breakout, close_pos, vol_shrink_standard, extreme_vol_shrink, near_ma10, near_ma20 = False, 0.5, False, False, False, False
-
-        try:
-            if retreat_score < 60:
-                ma10, ma20 = float(latest["MA10"]), float(latest["MA20"])
-                near_ma10 = (abs(current_price_adj - ma10) / ma10 < 0.02) and (current_price_adj > ma10 * 0.99)
-                near_ma20 = (abs(current_price_adj - ma20) / ma20 < 0.02) and (current_price_adj > ma20 * 0.99)
-                vol_shrink_standard = float(latest["Volume"]) < float(prev["Volume"]) * 0.5
-                extreme_vol_shrink = float(latest["Volume"]) < float(df["VOL5_PRIOR"].iloc[-1]) * 0.7
-                day_range = float(latest["Raw_High"]) - float(latest["Raw_Low"])
-                close_pos = (current_price_raw - float(latest["Raw_Low"])) / day_range if day_range > 0 else 0.5
-                vwap_breakout = (current_price_adj > float(latest["Typical_Price"])) and (float(prev["Close"]) <= float(prev["Typical_Price"]))
-        except Exception as e:
-            has_sys_error = True
-            position_comment = f"【安全模組例外】價格判斷失敗: {str(e)}"
-            candidate_status = "觀察 - 系統計算異常"
-
-        trust_buy = df.get("Trust_NetBuy", pd.Series([0])).tail(3).sum() > 0
-        co_buy = trust_buy and (df.get("Foreign_NetBuy", pd.Series([0])).tail(3).sum() > 0)
+        ratio = current_price_raw / current_price_adj if current_price_adj > 0 else 1.0
 
         vwap60_adj = float(latest.get("VWAP60", df["MA60"].iloc[-1]))
         if pd.isna(vwap60_adj) or vwap60_adj <= 0: vwap60_adj = float(latest["MA60"]) if not pd.isna(latest["MA60"]) else current_price_adj
 
-        cost_gap = current_price_adj - vwap60_adj
-        cost_distance = (cost_gap / vwap60_adj * 100) if vwap60_adj > 0 else 0
-
-        if cost_distance > 20: heat_level = "過熱"
-        elif cost_distance > 10: heat_level = "偏熱"
-        elif cost_distance < 0: heat_level = "水下(套牢)"
-        else: heat_level = "正常"
+        cost_distance = ((current_price_adj - vwap60_adj) / vwap60_adj * 100) if vwap60_adj > 0 else 0
+        heat_level = "過熱" if cost_distance > 20 else "偏熱" if cost_distance > 10 else "水下(套牢)" if cost_distance < 0 else "正常"
 
         can_relax_atr = is_dual_growth and (not is_pit_embargo) and (yoy >= 10) and (progress >= 30) and not tech_veto and is_fresh_and_complete
 
         if can_relax_atr:
             baseline = float(latest["MA10"]) if not pd.isna(latest["MA10"]) else current_price_adj
             defensive_price_adj = baseline - (2.2 * atr14)
-            if heat_level == "過熱": max_tolerance = 12.0
-            elif heat_level == "偏熱": max_tolerance = 15.0
-            else: max_tolerance = 18.0
+            if heat_level == "過熱": max_tolerance = 15.0
+            elif heat_level == "偏熱": max_tolerance = 20.0
+            else: max_tolerance = 25.0
         else:
             ma20_val = float(latest["MA20"]) if not pd.isna(latest["MA20"]) else current_price_adj
             valid_supports = [s for s in [ma20_val, vwap60_adj] if s < current_price_adj]
             baseline = max(valid_supports) if valid_supports else current_price_adj
             defensive_price_adj = baseline - (1.8 * atr14)
-            if heat_level == "過熱": max_tolerance = 8.0
-            elif heat_level == "偏熱": max_tolerance = 12.0
-            else: max_tolerance = 15.0
+            if heat_level == "過熱": max_tolerance = 15.0
+            elif heat_level == "偏熱": max_tolerance = 20.0
+            else: max_tolerance = 25.0
 
-        ratio = current_price_raw / current_price_adj if current_price_adj > 0 else 1.0
         defensive_price_raw = defensive_price_adj * ratio
+        is_evaluable = True
 
-        is_defense_valid = True
         if pd.isna(defensive_price_raw) or defensive_price_raw <= 0:
             defensive_price_exec = 0.0
-            defensive_status_text = "無有效防守價 (負值或異常)"
-            is_defense_valid = False
+            defensive_status_text = "無有效防守價 (異常)"
+            is_evaluable = False
         elif ((current_price_raw - defensive_price_raw) / current_price_raw * 100) > max_tolerance:
-            defensive_price_exec = 0.0
-            defensive_status_text = f"無有效防守價 (防守空間 > {max_tolerance}%)"
-            is_defense_valid = False
+            defensive_price_exec = WhaleTools.round_tick(defensive_price_raw, 'floor')
+            defensive_status_text = f"防守價過深(> {max_tolerance}%)，建議改用短均線停利"
         else:
             defensive_price_exec = WhaleTools.round_tick(defensive_price_raw, 'floor')
             defensive_status_text = "ATR動態基準計算"
 
-        is_evaluable = False
-        if (candidate_status == "候選 - 完整大局") and (not has_sys_error) and (not tech_veto) and is_defense_valid:
-            is_evaluable = True
-
         if is_evaluable:
+            vol_shrink_standard = float(latest["Volume"]) < float(prev["Volume"]) * 0.5
+            extreme_vol_shrink = float(latest["Volume"]) < float(df["VOL5_PRIOR"].iloc[-1]) * 0.7
+            day_range = float(latest["Raw_High"]) - float(latest["Raw_Low"])
+            close_pos = (current_price_raw - float(latest["Raw_Low"])) / day_range if day_range > 0 else 0.5
+            vwap_breakout = (current_price_adj > float(latest["Typical_Price"])) and (float(prev["Close"]) <= float(prev["Typical_Price"]))
+
+            ma10 = float(latest["MA10"]) if not pd.isna(latest["MA10"]) else current_price_adj
+            ma20 = float(latest["MA20"]) if not pd.isna(latest["MA20"]) else current_price_adj
+            near_ma10 = (abs(current_price_adj - ma10) / ma10 < 0.02) and (current_price_adj > ma10 * 0.99)
+            near_ma20 = (abs(current_price_adj - ma20) / ma20 < 0.02) and (current_price_adj > ma20 * 0.99)
+
+            trust_buy = df.get("Trust_NetBuy", pd.Series([0])).tail(3).sum() > 0
+            co_buy = trust_buy and (df.get("Foreign_NetBuy", pd.Series([0])).tail(3).sum() > 0)
+
             if (near_ma10 or near_ma20) and (vol_shrink_standard or extreme_vol_shrink) and close_pos > 0.8:
                 if vwap_breakout and co_buy and extreme_vol_shrink: position_comment = "[技術S級買點] 雙資合買極致量縮回測支撐,站上HLC/3代理!"
                 elif vwap_breakout and co_buy: position_comment = "[技術S級買點] 雙資合買量縮回測,站上HLC/3代理!"
@@ -1111,7 +969,6 @@ class FishPositionEngine:
         atr14_raw = atr14 * ratio
         target_low_raw = vwap60_raw + (3 * atr14_raw)
         target_high_raw = vwap60_raw + (6 * atr14_raw)
-
         if current_price_raw >= target_low_raw:
             target_low_raw = current_price_raw + (1.5 * atr14_raw)
             target_high_raw = current_price_raw + (3.0 * atr14_raw)
@@ -1121,46 +978,29 @@ class FishPositionEngine:
         target_low_exec = WhaleTools.round_tick(target_low_raw, 'floor')
         target_high_exec = WhaleTools.round_tick(target_high_raw, 'ceil')
 
-        e_score = max(0, min(100, endurance.get("endurance_score", 0) + data.get("chip_score", 0)))
+        e_score = max(0, min(100, endurance.get("endurance_score", 0) + chip_score))
 
-        if defensive_price_exec <= 0 or not is_defense_valid:
-            base_strategy = "【防守價失效/無防守】無法核算出合理的 ATR 防守區間或乖離過大，風險不可控"
-        elif fish_score >= 70 and e_score <= 40:
-            base_strategy = "【技術與籌碼背離】大趨勢偏多，但短線動能衰退，慎防獲利了結賣壓，切勿追高！"
-        elif fish_score < 70 and (retreat_score >= 60 or warning_score >= 70) and e_score < 40:
+        if not is_evaluable: base_strategy = "【防守價失效/無防守】無法核算出合理的防守區間，風險不可控"
+        elif fish_score >= 70 and e_score <= 40: base_strategy = "【技術與籌碼背離】大趨勢偏多，但短線動能衰退，切勿追高！"
+        elif fish_score < 70 and (retreat_score >= 60 or warning_score >= 70) and e_score < 40 and progress >= 50:
             base_strategy = "【末升段誘多】高風險+低期望值(出貨與接刀跡象已現,切勿追高)"
-        elif e_score <= 40 and retreat_score >= 60:
-            base_strategy = "【短線籌碼潰散/破線危機】短線遭遇沉重賣壓,嚴格防守!"
-        elif cost_distance > 25.0 and retreat_score <= 20 and fish_score >= 70 and e_score > 50:
-            base_strategy = "【極端妖股】風險極端(正乖離極大!空手勿追,防守沿5日線)"
-        elif fish_score >= 70 and (retreat_score <= 20 and warning_score < 30) and cost_distance <= max_tolerance and e_score >= 60 and fundamental.get('is_dual_growth', False):
-            base_strategy = "【大局完整：營收雙增核心單】低風險+高成長(多方與基本面共振完好,可偏多波段操作)"
-        elif fish_score >= 70 and (retreat_score <= 20 and warning_score < 30) and cost_distance <= max_tolerance and e_score >= 60:
-            base_strategy = "【純技術波段單】低風險+高期望值(技術籌碼共振完好,可積極操作)"
-        elif fish_score >= 60 and cost_distance <= 7.0 and e_score >= 60:
-            base_strategy = "【初升段成型】趨勢轉強且風險低(結構初展端倪,可酌量佈局)"
-        elif fish_score >= 60 and (retreat_score <= 20 and warning_score < 30) and cost_distance <= 8.0 and e_score >= 40:
-            base_strategy = "【左側轉折單】低風險+高期望值(左側摸底試單,嚴守停損)"
-        elif retreat_score >= 40 or warning_score >= 40:
-            base_strategy = "【風險醞釀中】部分風險指標升高(高位鬆動跡象,建議減碼或觀望)"
-        elif fish_score >= 60 and e_score < 60:
-            base_strategy = "【技術偏多但動能不足】線型尚可但缺乏買盤點火,建議等待表態"
-        else:
-            base_strategy = "【震盪整理區】多空動能分歧且不明確(建議休養生息)"
+        elif e_score <= 40 and retreat_score >= 60: base_strategy = "【短線籌碼潰散/破線危機】短線遭遇沉重賣壓,嚴格防守!"
+        elif cost_distance > 25.0 and retreat_score <= 20 and fish_score >= 70 and e_score > 50: base_strategy = "【極端妖股】風險極端(正乖離極大!空手勿追,防守沿5日線)"
+        elif fish_score >= 70 and retreat_score <= 20 and warning_score < 40 and e_score >= 60 and is_dual_growth: base_strategy = "【大局完整：營收雙增核心單】低風險+高成長(多方與基本面共振完好)"
+        elif fish_score >= 70 and retreat_score <= 20 and warning_score < 40 and e_score >= 60: base_strategy = "【純技術波段單】低風險+高期望值(技術籌碼共振完好,可積極操作)"
+        elif fish_score >= 60 and cost_distance <= 7.0 and e_score >= 60: base_strategy = "【初升段成型】趨勢轉強且風險低(結構初展端倪,可酌量佈局)"
+        elif fish_score >= 60 and retreat_score <= 20 and warning_score < 40 and cost_distance <= 8.0 and e_score >= 40: base_strategy = "【左側轉折單】低風險+高期望值(左側摸底試單,嚴守停損)"
+        elif retreat_score >= 40 or warning_score >= 40: base_strategy = "【風險醞釀中】部分風險指標升高(高位鬆動跡象,建議減碼或觀望)"
+        elif fish_score >= 60 and e_score < 60: base_strategy = "【技術偏多但動能不足】線型尚可但缺乏買盤點火,建議等待表態"
+        else: base_strategy = "【震盪整理區】多空動能分歧且不明確(建議休養生息)"
 
-        if market_status == 'Bear':
-            base_strategy = f"【逆勢高風險】大盤空頭，請縮小部位！ " + base_strategy
+        if market_status == 'Bear': base_strategy = f"【逆勢高風險】大盤空頭！ " + base_strategy
 
-        if candidate_status == "觀察 - 系統計算異常":
-            strategy_profile = f"【安全模組異常】系統強制降級。純技術面研判：{base_strategy}"
-        elif candidate_status == "【分析失敗】資料異常":
-            strategy_profile = f"【系統防呆】資料嚴重異常。純技術面研判：{base_strategy}"
-        elif candidate_status == "排除":
-            strategy_profile = f"【風險閘門排除】不列入期望值評估。純技術面研判：{base_strategy}"
-        elif not is_evaluable:
-            strategy_profile = f"【{candidate_status}】缺乏大局資料。純技術面研判：{base_strategy}"
-        else:
-            strategy_profile = base_strategy
+        if candidate_status == "觀察 - 系統計算異常": strategy_profile = f"【安全模組異常】系統強制降級。純技術面研判：{base_strategy}"
+        elif candidate_status == "【分析失敗】資料異常": strategy_profile = f"【系統防呆】資料嚴重異常。純技術面研判：{base_strategy}"
+        elif candidate_status == "排除": strategy_profile = f"【風險閘門排除】技術或籌碼面存在顯著風險，不建議進場操作。純技術面研判：{base_strategy}"
+        elif not is_evaluable: strategy_profile = f"【防守價異常】無法核算合理停損區間。純技術面研判：{base_strategy}"
+        else: strategy_profile = base_strategy
 
         return {
             "candidate_status": candidate_status, "fish_position": position, "progress": progress,
@@ -1173,9 +1013,8 @@ class FishPositionEngine:
             "max_tolerance": max_tolerance, "is_evaluable": is_evaluable
         }
 
-
 # ==========================================
-# 模組 8: EarlyWarningEngine (🌟 V25.2: 放寬預警帶至10%)
+# 模組 8: EarlyWarningEngine
 # ==========================================
 class EarlyWarningEngine:
     def calculate(self, data):
@@ -1190,26 +1029,21 @@ class EarlyWarningEngine:
             delta = df['Close'].diff()
             gain = delta.clip(lower=0)
             loss = -delta.clip(upper=0)
-
             avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
             avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-
             rs = avg_gain / avg_loss
             df['RSI'] = 100 - (100 / (1 + rs))
-
             df['RSI'] = np.where(avg_loss == 0, 100.0, df['RSI'])
             df['RSI'] = np.where((avg_loss == 0) & (avg_gain == 0), 50.0, df['RSI'])
-
             latest = df.iloc[-1]
-            prev = df.iloc[-2]
-
         except Exception as e:
             df['RSI'] = np.nan
             error_details.append(f"RSI計算錯誤: {str(e)}")
             has_error = True
 
         recent_high = df['High'].tail(20).max()
-        is_near_high = ((recent_high - latest['Close']) / latest['Close']) < 0.10
+        is_uptrend = latest['Close'] > df['MA60'].iloc[-1]
+        is_near_high = (((recent_high - latest['Close']) / latest['Close']) < 0.10) and is_uptrend
 
         grp1_score = 0
         try:
@@ -1220,7 +1054,6 @@ class EarlyWarningEngine:
         except Exception as e:
             checks.append(("高檔量縮且K線壓縮", "Error"))
             error_details.append(f"[Warning_Vol] {str(e)}")
-            has_error = True
 
         try:
             if 'Typical_Price' in df.columns and (df['Close'].tail(3) < df['Typical_Price'].tail(3)).sum() >= 2 and is_near_high:
@@ -1230,26 +1063,19 @@ class EarlyWarningEngine:
         except Exception as e:
             checks.append(("連續受制當日HLC/3代理線", "Error"))
             error_details.append(f"[Warning_HLC3] {str(e)}")
-            has_error = True
 
         try:
-            if pd.isna(latest['RSI']):
-                checks.append(("RSI動能頂背離現象", "Error"))
-                has_error = True
+            if pd.isna(latest['RSI']): checks.append(("RSI動能頂背離現象", "Error"))
             else:
                 is_price_peak = latest['Close'] >= df['Close'].tail(15).max()
                 prev_peaks = df.iloc[-25:-5][df.iloc[-25:-5]['Close'] >= df.iloc[-25:-5]['Close'].rolling(5).max()]
-                if is_price_peak and not prev_peaks.empty:
-                    prev_peak_rsi = prev_peaks.iloc[-1]['RSI']
-                    if latest['RSI'] < prev_peak_rsi:
-                        grp1_score += 30
-                        checks.append(("RSI動能頂背離現象", True))
-                    else: checks.append(("RSI動能頂背離現象", False))
+                if is_price_peak and not prev_peaks.empty and latest['RSI'] < prev_peaks.iloc[-1]['RSI']:
+                    grp1_score += 30
+                    checks.append(("RSI動能頂背離現象", True))
                 else: checks.append(("RSI動能頂背離現象", False))
         except Exception as e:
             checks.append(("RSI動能頂背離現象", "Error"))
             error_details.append(f"[Warning_RSI] {str(e)}")
-            has_error = True
 
         try:
             macd_decelerating = (latest['MACD_Hist'] > 0) and (latest['MACD_Hist'] < prev['MACD_Hist']) and (prev['MACD_Hist'] < df.iloc[-3]['MACD_Hist'])
@@ -1260,45 +1086,38 @@ class EarlyWarningEngine:
         except Exception as e:
             checks.append(("MACD紅柱連縮(上漲加速度反轉)", "Error"))
             error_details.append(f"[Warning_MACD] {str(e)}")
-            has_error = True
 
         grp1_score = min(60, grp1_score)
 
         grp2_score = 0
-        data_quality = data.get("data_quality", {})
-        margin_state = data_quality.get("margin_state", "missing")
-
-        if margin_state != 'complete':
-            checks.append(("融資餘額異常增加(散戶接刀)", "Unknown"))
+        margin_state = data.get("data_quality", {}).get("margin_state", "missing")
+        if margin_state != 'complete': checks.append(("融資餘額異常增加(散戶接刀)", "Unknown"))
         else:
             try:
                 recent_3_raw = df['Margin_Balance_Raw'].dropna().tail(3)
                 if len(recent_3_raw) == 3 and (recent_3_raw.index == df.index[-3:]).all():
-                    margin_diff = recent_3_raw.diff().dropna()
-                    if (margin_diff > 0).sum() >= 2:
-                        checks.append(("融資餘額異常增加(散戶接刀)", True))
-                        grp2_score += 40
+                    diffs = recent_3_raw.diff().dropna()
+                    if (diffs > 0).sum() >= 2:
+                        margin_inc = diffs[diffs > 0].sum()
+                        vol_avg = df['VOL20_PRIOR'].iloc[-1]
+                        if margin_inc > (vol_avg * 0.05):
+                            checks.append(("融資餘額異常增加(散戶接刀)", True))
+                            grp2_score += 20
+                        else: checks.append(("融資微增(未達警戒比例)", False))
                     else: checks.append(("融資餘額異常增加(散戶接刀)", False))
-                else:
-                    checks.append(("融資餘額異常增加(散戶接刀)", "Unknown"))
+                else: checks.append(("融資餘額異常增加(散戶接刀)", "Unknown"))
             except Exception as e:
                 checks.append(("融資餘額異常增加(散戶接刀)", "Error"))
                 error_details.append(f"[Warning_Margin] {str(e)}")
-                has_error = True
 
-        grp2_score = min(40, grp2_score)
         score = min(100, grp1_score + grp2_score)
 
-        if has_error: status = "系統計算異常(Unknown)"
+        if len(error_details) > 0: status = "系統計算異常(Unknown)"
         elif score >= 70: status = "高度警戒(A轉風險極大或散戶接刀)"
         elif score >= 30: status = "動能衰退(提防拉高出貨)"
         else: status = "動能正常(未見明顯敗象)"
 
-        return {
-            "warning_score": score, "warning_status": status, "warning_checks": checks,
-            "has_error": has_error, "error_details": error_details
-        }
-
+        return {"warning_score": score, "warning_status": status, "warning_checks": checks, "has_error": len(error_details)>0, "error_details": error_details}
 
 # ==========================================
 # 模組 9: SmartMoneyDefenseEngine
@@ -1414,11 +1233,10 @@ class SmartMoneyDefenseEngine:
         elif defense_score <= 70: status = "防守型態確認(下檔有撐)"
         else: status = "強烈護盤型態(防守轉攻擊)"
 
-        return {
-            "defense_score": defense_score, "defense_status": status, "defense_signals": signals,
-            "has_error": has_error, "error_details": error_details
+        return {\
+            "defense_score": defense_score, "defense_status": status, "defense_signals": signals,\
+            "has_error": has_error, "error_details": error_details\
         }
-
 
 # ==========================================
 # 模組 10: ChipRadarEngine
@@ -1500,18 +1318,22 @@ class ChipRadarEngine:
         else:
             status = "法人籌碼中立"
 
-        return {
-            "chip_score": score, "chip_status": status, "chip_messages": messages
+        return {\
+            "chip_score": score, "chip_status": status, "chip_messages": messages\
         }
 
-
 # ==========================================
-# 模組 11: ChipXRayEngine (🌟 V25.2: 修正純度語法)
+# 模組 11: ChipXRayEngine
 # ==========================================
 class ChipXRayEngine:
-    def calculate(self, tdcc_df, position_info):
+    def calculate(self, tdcc_df, fish_score, retreat_score):
         if tdcc_df is None or tdcc_df.empty or len(tdcc_df) < 3:
-            return {"xray_status": "資料不足", "xray_message": "集保數據不足，無法進行中線判定", "is_surge": False}
+            avail = len(tdcc_df) if tdcc_df is not None else 0
+            return {\
+                "xray_status": "快取累積中",\
+                "xray_message": f"本地快取庫僅有 {avail} 週記錄，需累積滿 3 週即可啟動大戶 X 光透視",\
+                "is_surge": False\
+            }
 
         latest_3 = tdcc_df.tail(3).reset_index(drop=True)
         w0 = latest_3.iloc[2]
@@ -1532,7 +1354,7 @@ class ChipXRayEngine:
             purity = delta_w / abs(delta_r) if delta_r != 0 else 0.0
             if purity >= 0.8:
                 status = "S級急買突襲"
-                message = f"🔥 【S級急買突襲】大戶單週暴力掃貨 (增幅 {delta_w:.2f}%)，大戶吸籌力道為散戶退場的 {purity:.1f} 倍！散戶急退，隨時發動！"
+                message = f"🔥 【S級急買突襲】大戶單週暴力掃貨 (增幅 {delta_w:.2f}%)，大戶吸籌力道為散戶退場的 {purity:.1f} 倍！隨時發動！"
                 is_surge = True
                 return {"xray_status": status, "xray_message": message, "is_surge": is_surge}
 
@@ -1542,10 +1364,10 @@ class ChipXRayEngine:
         is_distributing = (w0['Whale_Pct'] < w1['Whale_Pct'] and w1['Whale_Pct'] < w2['Whale_Pct'])
         is_retail_entering = (w0['Retail_Pct'] > w1['Retail_Pct'] and w1['Retail_Pct'] > w2['Retail_Pct'])
 
-        pos = position_info.get("fish_position", "")
+        pos_str = "底" if fish_score < 60 else "出貨" if retreat_score >= 60 else ""
 
         if is_accumulating and is_retail_leaving:
-            if "底" in pos or "形成" in pos:
+            if "底" in pos_str:
                 status = "黃金坑潛伏"
                 message = f"★ 【底部籌碼沉澱】大戶(連3週)默默吸籌，散戶退場，等待突破！"
             else:
@@ -1553,8 +1375,8 @@ class ChipXRayEngine:
                 message = f"💡 【大戶吸籌】籌碼持續集中至大戶手中，趨勢偏多。"
 
         elif is_distributing and is_retail_entering:
-            if "出貨" in pos or "魚尾" in pos:
-                status = "頂峰警報"
+            if "出貨" in pos_str:
+                status = "逃頂警報"
                 message = f"☠️ 【大戶派發確認】高檔籌碼鬆動，主力連3週倒貨給散戶，嚴格防守！"
             else:
                 status = "大戶派發"
