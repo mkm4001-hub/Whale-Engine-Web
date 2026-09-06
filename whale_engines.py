@@ -112,7 +112,6 @@ class DataEngine:
         if dataloader is None:
             self.dl = DataLoader()
             token = os.getenv("FINMIND_TOKEN")
-            # 💡 已移除強制 Token 驗證，若無 Token 自動走免費版 API
             if token:
                 self.dl.login_by_token(api_token=token)
         else: self.dl = dataloader
@@ -1233,9 +1232,9 @@ class SmartMoneyDefenseEngine:
         elif defense_score <= 70: status = "防守型態確認(下檔有撐)"
         else: status = "強烈護盤型態(防守轉攻擊)"
 
-        return {\
-            "defense_score": defense_score, "defense_status": status, "defense_signals": signals,\
-            "has_error": has_error, "error_details": error_details\
+        return {
+            "defense_score": defense_score, "defense_status": status, "defense_signals": signals,
+            "has_error": has_error, "error_details": error_details
         }
 
 # ==========================================
@@ -1318,8 +1317,8 @@ class ChipRadarEngine:
         else:
             status = "法人籌碼中立"
 
-        return {\
-            "chip_score": score, "chip_status": status, "chip_messages": messages\
+        return {
+            "chip_score": score, "chip_status": status, "chip_messages": messages
         }
 
 # ==========================================
@@ -1329,10 +1328,10 @@ class ChipXRayEngine:
     def calculate(self, tdcc_df, fish_score, retreat_score):
         if tdcc_df is None or tdcc_df.empty or len(tdcc_df) < 3:
             avail = len(tdcc_df) if tdcc_df is not None else 0
-            return {\
-                "xray_status": "快取累積中",\
-                "xray_message": f"本地快取庫僅有 {avail} 週記錄，需累積滿 3 週即可啟動大戶 X 光透視",\
-                "is_surge": False\
+            return {
+                "xray_status": "快取累積中",
+                "xray_message": f"本地快取庫僅有 {avail} 週記錄，需累積滿 3 週即可啟動大戶 X 光透視",
+                "is_surge": False
             }
 
         latest_3 = tdcc_df.tail(3).reset_index(drop=True)
