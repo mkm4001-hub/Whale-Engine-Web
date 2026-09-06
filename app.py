@@ -13,9 +13,8 @@ from plotly.subplots import make_subplots
 import mplfinance as mpf
 from PIL import Image
 import google.generativeai as genai
-from FinMind.data import DataLoader
 
-# 載入 V25.2 Whale Engines (使用目前穩定的主程式)
+# 載入 V25.5 Whale Engines
 from whale_engines import *
 
 # ==========================================
@@ -23,8 +22,6 @@ from whale_engines import *
 # ==========================================
 def get_kline_charts_and_images(stock_id, target_code):
     tz = pytz.timezone('Asia/Taipei')
-    
-    # 防爬蟲：每次抓圖前隨機延遲 0.5 ~ 1.5 秒
     time.sleep(random.uniform(0.5, 1.5))
     ticker = yf.Ticker(target_code)
     
@@ -46,7 +43,7 @@ def get_kline_charts_and_images(stock_id, target_code):
     
     # --- 2. 抓取 5 分鐘折線圖 ---
     df_5m = ticker.history(period="5d", interval="5m")
-    latest_day_str = "" # 🌟 用來儲存 5分K 的實際日期
+    latest_day_str = ""
     if not df_5m.empty:
         df_5m.index = pd.to_datetime(df_5m.index)
         if getattr(df_5m.index, 'tz', None) is not None:
@@ -55,11 +52,10 @@ def get_kline_charts_and_images(stock_id, target_code):
         unique_dates = pd.Series(df_5m.index.date).unique()
         if len(unique_dates) > 0:
             latest_day = unique_dates[-1]
-            latest_day_str = latest_day.strftime('%Y-%m-%d') # 取得日期字串
+            latest_day_str = latest_day.strftime('%Y-%m-%d')
             df_5m = df_5m[df_5m.index.date == latest_day]
             df_5m = df_5m.between_time('09:00', '13:35')
         
-    # --- 網頁 Plotly 繪圖函式 ---
     def make_plotly_chart(df, title, is_line=False):
         if df is None or df.empty: return None
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
@@ -85,25 +81,22 @@ def get_kline_charts_and_images(stock_id, target_code):
         return fig
 
     fig_daily = make_plotly_chart(df_daily, f"[{stock_id}] 近2個月 日K線圖 (含5/10/20均價與均量)", is_line=False)
-    
-    # 🌟 修改：將取得的日期動態加入 5分K 標題中
     title_5m = f"[{stock_id}] 當日 5分鐘折線走勢圖 ({latest_day_str} 09:00~13:30)" if latest_day_str else f"[{stock_id}] 當日 5分鐘折線走勢圖 (09:00~13:30)"
     fig_5m = make_plotly_chart(df_5m, title_5m, is_line=True)
 
-    # --- AI 辨識圖片繪圖函式 ---
     def make_image_for_ai(df, chart_type='candle', is_daily=False):
         if df is None or df.empty or len(df) < 5: return None
-        df_copy = df.copy()
+        df_copy = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
         
         apds = []
         if is_daily:
             apds = [
-                mpf.make_addplot(df_copy['MA5'], color='orange', width=1),
-                mpf.make_addplot(df_copy['MA10'], color='blue', width=1),
-                mpf.make_addplot(df_copy['MA20'], color='purple', width=1),
-                mpf.make_addplot(df_copy['VMA5'], color='orange', width=1, panel=1),
-                mpf.make_addplot(df_copy['VMA10'], color='blue', width=1, panel=1),
-                mpf.make_addplot(df_copy['VMA20'], color='purple', width=1, panel=1),
+                mpf.make_addplot(df['MA5'], color='orange', width=1),
+                mpf.make_addplot(df['MA10'], color='blue', width=1),
+                mpf.make_addplot(df['MA20'], color='purple', width=1),
+                mpf.make_addplot(df['VMA5'], color='orange', width=1, panel=1),
+                mpf.make_addplot(df['VMA10'], color='blue', width=1, panel=1),
+                mpf.make_addplot(df['VMA20'], color='purple', width=1, panel=1),
             ]
         
         buf = io.BytesIO()
@@ -116,14 +109,13 @@ def get_kline_charts_and_images(stock_id, target_code):
 
     return fig_daily, fig_5m, img_daily, img_5m
 
-
-# 🌟 回傳文字結果與確切模型版本
+# 🌟 回傳文字結果與確切模型版本，優先使用 Pro
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合，並說明如何依照5分線圖初步觀看大盤意圖。再請你依著台股常態，判斷隔日有可能的走勢與發展方向。
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -154,8 +146,14 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     if not available_models:
         raise Exception("此 API Key 沒有可用的多模態視覺模型權限。")
         
+    # 🌟 Google 最頂級模型為 Pro，極速版為 Flash，這裡優先分配 Pro
     target_model = available_models[0]
-    for pref in ['models/gemini-3.8-flash', 'models/gemini-3.1-pro', 'models/gemini-1.5-flash', 'models/gemini-1.5-pro']:
+    for pref in [
+        'models/gemini-1.5-pro-latest', 
+        'models/gemini-1.5-pro', 
+        'models/gemini-1.5-flash-latest', 
+        'models/gemini-1.5-flash'
+    ]:
         if pref in available_models:
             target_model = pref
             break
@@ -184,10 +182,10 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "pwd001!", "role": "superuser"}, 
+    "chiu": {"password": "pwd", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "chi01": {"password": "cc2468500", "role": "full"},
-    "abs0401": {"password": "pwd002!", "role": "full"},
+    "admin1": {"password": "pwd", "role": "full"},
+    "admin2": {"password": "pwd", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -196,7 +194,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒 巨鯨系統V25.2")
+        st.title("🔒 邱專屬看盤系統")
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
@@ -264,7 +262,7 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 巨鯨系統V25.2")
+st.title("🐋 邱神選股決策中心 V25.5 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無需輸入 Token。")
 
 mode_choice = st.radio("選擇模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
@@ -284,8 +282,14 @@ if st.button("🚀 開始分析"):
         total_stocks = len(stock_list)
         
         try:
+            # 建立 TDCC 虛擬快取資料夾防呆
+            tdcc_cache_dir = os.path.join(os.getcwd(), 'TDCC_Cache')
+            tdcc_manager = TDCCCacheManager(tdcc_cache_dir)
+            
+            # 使用自動走免費版的 DataLoader
             dl = DataLoader()
-            data_engine = DataEngine(dataloader=dl)
+            data_engine = DataEngine(dataloader=dl, tdcc_manager=tdcc_manager)
+            
             fish_engine = FishScoreEngine()
             retreat_engine = RetreatScoreEngine()
             fundamental_engine = FundamentalEngine()
@@ -297,12 +301,14 @@ if st.button("🚀 開始分析"):
             xray_engine = ChipXRayEngine()
             
             for idx, stock_id in enumerate(stock_list):
-                st.subheader(f"📊 [{stock_id}] 實戰分析報告 (V25.2)")
+                st.subheader(f"📊 [{stock_id}] 實戰分析報告 (V25.5)")
                 
                 try:
                     df, target_code, data_quality, rev_df, tdcc_df = data_engine.load_stock(stock_id, current_mode)
                     mkt = data_engine.load_market(target_code, data_quality['latest_price_date'])
                     data = data_engine.prepare_indicators(df, mkt)
+                    
+                    data_quality['mkt_latest_date'] = data.get('mkt_latest_date', '無資料')
                     data['data_quality'] = data_quality
                     
                     now = datetime.now(pytz.timezone('Asia/Taipei')).strftime("%Y-%m-%d")
@@ -312,9 +318,11 @@ if st.button("🚀 開始分析"):
                     warning = warning_engine.calculate(data)
                     endurance = endurance_engine.calculate(data)
                     defense = defense_engine.calculate(data, market_data={"df": mkt})
-                    position = position_engine.calculate(data, fish, retreat, warning, endurance, defense, fundamental)
+                    
+                    # 🌟 V25.5 順序對齊：Position 必須承接 Chip 與 Xray 分數
                     chip = chip_engine.calculate(data, current_mode)
-                    chip_xray = xray_engine.calculate(tdcc_df, position)
+                    chip_xray = xray_engine.calculate(tdcc_df, fish["fish_score"], retreat["retreat_score"])
+                    position = position_engine.calculate(data, fish, retreat, warning, endurance, defense, fundamental, chip, chip_xray)
                     
                     # 抓取日K與5分折線圖表
                     fig_daily, fig_5m, img_daily, img_5m = get_kline_charts_and_images(stock_id, target_code)
@@ -343,7 +351,6 @@ if st.button("🚀 開始分析"):
                     st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
                     
                     if st.session_state.role in ["superuser", "full"]:
-                        # 🌟 修改：更新了分頁 2 的名稱
                         tab1, tab2, tab3, tab4, tab5 = st.tabs([
                             "📈 圖表專區 (日K/5分折線)", 
                             "🤖 GEMINI AI趨勢分析", 
@@ -405,13 +412,11 @@ if st.button("🚀 開始分析"):
                         with tab5:
                             col_a, col_b = st.columns(2)
                             with col_a:
-                                # 🌟 修改：加上正面指標文字
                                 st.markdown("**【魚頭體檢】** `(正面指標)`")
                                 for item, status in fish["health_checks"]:
                                     mark = "✅" if status is True else "❌" if status is False else "❓"
                                     st.caption(f"{mark} {item}")
                             with col_b:
-                                # 🌟 修改：加上負面指標文字
                                 st.markdown("**【撤退檢查】** `(負面指標)`")
                                 for item, status in retreat["retreat_checks"]:
                                     mark = "❌" if status is True else "✅" if status is False else "❓"
