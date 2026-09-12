@@ -11,7 +11,7 @@ from FinMind.data import DataLoader
 import warnings
 warnings.filterwarnings("ignore")
 
-WHALE_VERSION = "V25.6 PRO"
+WHALE_VERSION = "V25.7 PRO"
 
 # ==========================================
 # 模組 1: WhaleTools
@@ -73,7 +73,7 @@ class WhaleTools:
 
 
 # ==========================================
-# 模組 2: TDCC 快取與 DataEngine (T-1 柔性對齊與免 Token)
+# 模組 2: TDCC 快取與 DataEngine
 # ==========================================
 class TDCCCacheManager:
     def __init__(self, cache_dir):
@@ -216,7 +216,7 @@ class DataEngine:
             else:
                 data_quality['inst_state'] = 'empty_response'
                 df['Trust_NetBuy'] = df['Foreign_NetBuy'] = df['Dealer_NetBuy'] = df['Inst_NetBuy'] = np.nan
-        except Exception as e:
+        except Exception:
             data_quality['inst_state'] = 'network_error'
             df['Trust_NetBuy'] = df['Foreign_NetBuy'] = df['Dealer_NetBuy'] = df['Inst_NetBuy'] = np.nan
 
@@ -234,7 +234,7 @@ class DataEngine:
             else:
                 data_quality['margin_state'] = 'empty_response'
                 df['Margin_Balance_Raw'] = np.nan
-        except Exception as e:
+        except Exception:
             data_quality['margin_state'] = 'network_error'
             df['Margin_Balance_Raw'] = np.nan
 
@@ -364,7 +364,7 @@ class DataEngine:
 
 
 # ==========================================
-# 模組 3: FishScoreEngine
+# 模組 3: FishScoreEngine (🌟 V25.7 加入發動補償綠色通道)
 # ==========================================
 class FishScoreEngine:
     def calculate(self, data, custom_params=None):
@@ -423,6 +423,16 @@ class FishScoreEngine:
         score += vwap_score
 
         try:
+            # 🌟 V25.7 發動補償：均線極度壓縮且站上均線，給予專屬加分，化解初升段動能委屈
+            is_stand_above = latest["Close"] > latest["MA20"] and (latest["MA20"] >= latest["MA60"] * 0.98)
+            bandwidth_now = latest.get("Bandwidth", 1.0)
+
+            if is_stand_above and bandwidth_now < 0.08:
+                score += 10
+                health_checks.append(("均線麻花極度壓縮蓄勢", True))
+            else:
+                health_checks.append(("均線麻花極度壓縮蓄勢", False))
+
             mean_bandwidth = df["Bandwidth"].shift(1).tail(20).mean()
             prev_bandwidth = df["Bandwidth"].shift(1).iloc[-1]
             is_bb_squeeze = prev_bandwidth <= (mean_bandwidth * 0.85) if mean_bandwidth > 0 else False
@@ -431,7 +441,7 @@ class FishScoreEngine:
                 health_checks.append(("布林極限壓縮後突破發動", True))
             else: health_checks.append(("布林極限壓縮後突破發動", False))
         except Exception:
-            health_checks.append(("布林極限壓縮後突破發動", "Error"))
+            health_checks.append(("均線壓縮與突破偵測", "Error"))
             has_error = True
 
         volume_score = 0
@@ -870,11 +880,8 @@ class FishPositionEngine:
             opportunity_score = min(100, opportunity_score + 10)
 
         e_score = max(0, min(100, endurance.get("endurance_score", 0) + chip_score))
-
-        if e_score <= 30 or chip_score <= -15:
-            opportunity_score = min(opportunity_score, 39)
-        elif e_score <= 50:
-            opportunity_score = min(opportunity_score, 59)
+        if e_score <= 30 or chip_score <= -15: opportunity_score = min(opportunity_score, 39)
+        elif e_score <= 50: opportunity_score = min(opportunity_score, 59)
 
         has_immunity = is_dual_growth and (chip_score >= 10)
         veto_threshold = 55 if has_immunity else 60
@@ -924,6 +931,7 @@ class FishPositionEngine:
             opportunity_level = f"降級({opportunity_level})"
 
         position_comment = ""
+
         if has_sys_error:
             candidate_status, opportunity_score, opportunity_level = "觀察 - 系統計算異常", 0, "-"
             position_comment = "底層安全模組例外，系統強制拒絕評估"
@@ -1467,3 +1475,104 @@ class ChipXRayEngine:
             message = "大戶單週無明顯急買突襲 (尚缺第3週資料判定趨勢)"
 
         return {"xray_status": status, "xray_message": message, "is_surge": is_surge}
+
+# ==========================================
+# 模組 12: ScannerEngine (🌟 V25.7 加入的前鋒雷達)
+# ==========================================
+class ScannerEngine:
+    def __init__(self, dataloader):
+        self.dl = dataloader
+
+    def run_scan(self, min_volume_sheets=800, top_n_liquidity=300, max_bandwidth=0.025):
+        try:
+            stock_info = self.dl.taiwan_stock_info()
+            mask = (stock_info['industry_category'] != '') & (stock_info['stock_id'].str.len() == 4)
+            common_stocks = stock_info[mask].copy()
+
+            tickers = []
+            for index, row in common_stocks.iterrows():
+                if row['type'] == 'twse': tickers.append(f"{row['stock_id']}.TW")
+                elif row['type'] == 'tpex': tickers.append(f"{row['stock_id']}.TWO")
+
+            min_shares = min_volume_sheets * 1000
+            candidate_dict = {}
+            chunk_size = 200
+
+            for i in range(0, len(tickers), chunk_size):
+                chunk = tickers[i:i + chunk_size]
+                data = yf.download(chunk, period="2d", group_by="ticker", auto_adjust=False, threads=False)
+
+                for ticker in chunk:
+                    try:
+                        if len(chunk) == 1:
+                            vol = data['Volume'].iloc[-1]
+                            close_price = data['Close'].iloc[-1]
+                        elif ticker in data.columns.levels[0]:
+                            vol = data[ticker]['Volume'].iloc[-1]
+                            close_price = data[ticker]['Close'].iloc[-1]
+                        else:
+                            continue
+
+                        if pd.notna(vol) and pd.notna(close_price) and vol >= min_shares:
+                            candidate_dict[ticker] = vol
+                    except Exception:
+                        continue
+
+                time.sleep(random.uniform(1.5, 3.0))
+
+            sorted_stocks = sorted(candidate_dict.items(), key=lambda x: x[1], reverse=True)
+            selected_tickers = [stock[0] for stock in sorted_stocks[:top_n_liquidity]]
+
+            target_stocks = []
+            chunk_size_120 = 100
+
+            for i in range(0, len(selected_tickers), chunk_size_120):
+                chunk = selected_tickers[i:i + chunk_size_120]
+                batch_data = yf.download(chunk, period="120d", group_by="ticker", auto_adjust=False, threads=False)
+
+                for ticker in chunk:
+                    try:
+                        if len(chunk) == 1:
+                            hist = batch_data.dropna(subset=['Close', 'High', 'Low', 'Volume'])
+                        else:
+                            if ticker not in batch_data.columns.levels[0]: continue
+                            hist = batch_data[ticker].dropna(subset=['Close', 'High', 'Low', 'Volume'])
+
+                        if len(hist) < 60: continue
+
+                        close = hist['Close']
+                        current_price = close.iloc[-1]
+                        if pd.isna(current_price) or current_price == 0: continue
+
+                        ma5 = close.rolling(window=5).mean()
+                        ma10 = close.rolling(window=10).mean()
+                        ma20 = close.rolling(window=20).mean()
+                        ma60 = close.rolling(window=60).mean()
+
+                        ma5_now = ma5.iloc[-1]
+                        ma10_now = ma10.iloc[-1]
+                        ma20_now = ma20.iloc[-1]
+                        ma60_now = ma60.iloc[-1]
+
+                        ma_max = max(ma5_now, ma10_now, ma20_now)
+                        ma_min = min(ma5_now, ma10_now, ma20_now)
+
+                        bandwidth_ratio = (ma_max - ma_min) / ma20_now
+                        cond_squeeze = (bandwidth_ratio <= max_bandwidth)
+                        cond_stand_above = (current_price >= ma_max)
+                        cond_ma20_trend = (ma20_now >= ma20.iloc[-3])
+                        cond_long_term = (ma20_now >= ma60_now * 0.98)
+
+                        if cond_squeeze and cond_stand_above and cond_ma20_trend and cond_long_term:
+                            clean_ticker = ticker.replace(".TW", "").replace(".TWO", "")
+                            target_stocks.append(clean_ticker)
+
+                    except Exception:
+                        continue
+
+                time.sleep(random.uniform(1.5, 3.0))
+
+            return target_stocks
+
+        except Exception as e:
+            return []
