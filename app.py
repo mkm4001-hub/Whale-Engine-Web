@@ -129,25 +129,51 @@ def render_plotly_charts(stock_id):
         st.error(f"❌ 圖表渲染失敗: {str(e)}")
 
 # ==========================================
-# 4. Gemini AI 視覺交叉審查模組
+# 4. Gemini AI 視覺交叉審查模組 (升級精準參數餵食)
 # ==========================================
-def gemini_vision_review(stock_id, current_key):
+def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
     if current_key:
         st.subheader("🤖 Gemini AI 深度審查 (巨鯨核心)")
         genai.configure(api_key=current_key)
         
-        # 這裡的按鈕觸發後，因為外層有 st.session_state 保護，畫面不會再跳掉
         if st.button(f"啟動 {stock_id} AI 分析"):
-            with st.spinner("🧠 巨鯨系統正在融合量化數據與圖表型態進行審查..."):
+            with st.spinner("🧠 巨鯨系統正在將量化特徵融合交由 AI 審查..."):
                 try:
-                    model = genai.GenerativeModel('gemini-1.5-pro')
-                    prompt = f"你是一位擁有20年經驗的台股頂級量化交易專家。請根據『巨鯨系統 V25.7 PRO』對 {stock_id} 的各項均線（MA5/10/20）與成交量變化，給出專業的進出場策略、型態判讀與風險提示。請使用繁體中文（台灣）。"
+                    # 修正 404 錯誤，改用 gemini-1.5-pro-latest 或 fallback 至 gemini-pro
+                    try:
+                        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+                    except:
+                        model = genai.GenerativeModel('gemini-pro')
+                    
+                    # 組合提示詞，把系統找出的正負面指標強制餵給 AI
+                    pos_str = chr(10).join(['- ' + p for p in pos_list]) if pos_list else '- 無明顯正面指標'
+                    neg_str = chr(10).join(['- ' + n for n in neg_list]) if neg_list else '- 無明顯負面指標'
+                    
+                    prompt = f"""你是一位擁有20年經驗的台股頂級量化交易專家。
+請根據『巨鯨系統 V25.7 PRO』對台股代號 {stock_id} 萃取出的客觀多空指標，給出專業的進出場策略、籌碼判讀與風險提示。
+
+【🟢 系統判定之正面指標 (多方支撐)】
+{pos_str}
+
+【🔴 系統判定之負面/風險指標 (空方壓力)】
+{neg_str}
+
+【綜合量化數據】
+- 目前價位: {res_data['position']['current_price']}
+- 實戰防守價: {res_data['position']['defensive_price']}
+- 成本距離(60日乖離): {res_data['position']['cost_distance']}%
+- 系統給出的策略指引: {res_data['position']['strategy_profile']}
+
+請基於以上巨鯨系統的「客觀特徵數據」，切勿瞎猜，進行詳盡的多空推演分析。請使用繁體中文（台灣）。"""
+                    
                     response = model.generate_content(prompt)
                     st.info(response.text)
+                    
                 except Exception as e:
                     st.error(f"❌ Gemini AI 呼叫失敗: {str(e)}")
+                    st.caption("💡 提示：若仍出現 404 錯誤，可能為 Google API 端波動，系統已嘗試使用備用模型連線。")
     else:
-        pass # 若未上傳 API Key，則隱藏按鈕，完全不進行 AI 分析
+        pass 
 
 # ==========================================
 # 5. UI 輔助函數 (轉換 Colab 的 O/X 記號)
@@ -179,12 +205,10 @@ stock_input = st.text_input("🔍 請輸入股票代號 (例如：2330)", st.ses
 if st.button("🚀 執行單檔深度體檢") and stock_input:
     with st.spinner(f"巨鯨系統正在對 {stock_input} 進行量化分析 (若無上傳 Token，系統將自動啟動亂數延遲防呆，請稍候)..."):
         res = engine.analyze(stock_input, mode='after_market')
-        # 將運算結果存入記憶體中
         st.session_state['analysis_result'] = res
         st.session_state['analyzed_stock'] = stock_input
 
-# 💡 只要記憶體內有結果，而且目前的代號沒有被修改，就把畫面渲染出來
-# 這樣點擊 AI 按鈕時，系統就不會以為您沒有做過分析了！
+# 渲染邏輯
 if st.session_state['analysis_result'] is not None and st.session_state['analyzed_stock'] == stock_input:
     res = st.session_state['analysis_result']
     
@@ -202,6 +226,51 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
         fun = res["fundamental"]
         dq = res["data_quality"]
 
+        # ==========================================
+        # 💡 多空指標自動萃取邏輯 (餵給 UI 與 AI)
+        # ==========================================
+        positives = []
+        negatives = []
+        
+        # 1. 魚頭體檢 (True為正向)
+        for item, status in f["health_checks"]:
+            if status is True: positives.append(f"【技術】{item}")
+            
+        # 2. 撤退與預警 (True為負向風險)
+        for item, status in r["retreat_checks"]:
+            if status is True: negatives.append(f"【撤退】{item}")
+        for item, status in w["warning_checks"]:
+            if status is True: negatives.append(f"【預警】{item}")
+            
+        # 3. 防守訊號 (皆為正向)
+        for sig in d["defense_signals"]:
+            positives.append(f"【防禦】{sig}")
+            
+        # 4. 續航力 (依關鍵字自動分類)
+        for msg in e["endurance_messages"]:
+            if any(k in msg for k in ["強勢", "買", "壓縮爆發", "大單"]):
+                positives.append(f"【動能】{msg}")
+            elif any(k in msg for k in ["弱勢", "賣", "衰退", "耗盡"]):
+                negatives.append(f"【動能】{msg}")
+                
+        # 5. 法人與集保
+        for msg in c["chip_messages"]:
+            if any(k in msg for k in ["買", "點火", "認養", "進駐"]):
+                positives.append(f"【法人】{msg}")
+            elif any(k in msg for k in ["賣", "結帳", "提款", "潰散"]):
+                negatives.append(f"【法人】{msg}")
+                
+        if cx.get("is_surge", False) or "吸籌" in cx.get("xray_status", "") or "潛伏" in cx.get("xray_status", ""):
+            positives.append(f"【集保】{cx.get('xray_message', '')}")
+        elif "派發" in cx.get("xray_status", "") or "逃頂" in cx.get("xray_status", ""):
+            negatives.append(f"【集保】{cx.get('xray_message', '')}")
+            
+        # 6. 基本面營收
+        if fun.get("is_dual_growth", False):
+            positives.append(f"【營收】{fun.get('fund_label', '')}")
+        elif fun.get("yoy", 0) < 0 or fun.get("mom", 0) < 0:
+            negatives.append(f"【營收】{fun.get('fund_label', '')}")
+
         # --- 區塊 1：核心 KPI 面板 ---
         st.subheader("📌 戰情核心面板")
         col1, col2, col3, col4 = st.columns(4)
@@ -218,7 +287,25 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
         
         st.info(f"💡 **系統策略指引**：{p['strategy_profile']} (防守基準: {p['defensive_status_text']})")
 
-        # --- 區塊 2：單機版細部指標展開 ---
+        # --- 區塊 2：多空綜合指標看板 (新增) ---
+        st.markdown("---")
+        st.subheader("⚖️ 巨鯨多空力道總結 (自動彙整)")
+        col_pos, col_neg = st.columns(2)
+        with col_pos:
+            st.success("🟢 **正面指標 (多方支撐)**")
+            if positives:
+                for p_ind in positives: st.markdown(f"- {p_ind}")
+            else:
+                st.write("- 目前無明顯多方特徵")
+                
+        with col_neg:
+            st.error("🔴 **負面/風險指標 (空方壓力)**")
+            if negatives:
+                for n_ind in negatives: st.markdown(f"- {n_ind}")
+            else:
+                st.write("- 目前無明顯空方特徵")
+
+        # --- 區塊 3：單機版細部指標展開 ---
         st.markdown("---")
         st.subheader("📋 深度量化指標明細")
         
@@ -268,10 +355,12 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
             st.write(f"法人買賣超最新日: {dq.get('inst_latest_date', '無')}")
             st.write(f"集保大戶最新日: {dq.get('tdcc_latest_date', '無')}")
             
-        # --- 區塊 3：圖表與 AI 審查 ---
+        # --- 區塊 4：圖表與 AI 審查 ---
         st.markdown("---")
         render_plotly_charts(stock_input)
-        gemini_vision_review(stock_input, gemini_key)
+        
+        # 💡 將萃取出的正負面指標，連同計算結果一起傳給 AI
+        gemini_vision_review(stock_input, gemini_key, res, positives, negatives)
         
     else:
         st.error(f"❌ {stock_input} 資料異常或歷史不足，無法完成分析。")
