@@ -129,7 +129,7 @@ def render_plotly_charts(stock_id):
         st.error(f"❌ 圖表渲染失敗: {str(e)}")
 
 # ==========================================
-# 4. Gemini AI 視覺交叉審查模組 (升級強固版)
+# 4. Gemini AI 視覺交叉審查模組 (動態模型名稱標示)
 # ==========================================
 def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
     if current_key:
@@ -139,7 +139,6 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
         if st.button(f"啟動 {stock_id} AI 分析"):
             with st.spinner("🧠 巨鯨系統正在將量化特徵融合交由 AI 審查 (請稍候)..."):
                 
-                # 組合提示詞，加入您指定的角色設定與免責聲明要求
                 pos_str = chr(10).join(['- ' + p for p in pos_list]) if pos_list else '- 無明顯正面指標'
                 neg_str = chr(10).join(['- ' + n for n in neg_list]) if neg_list else '- 無明顯負面指標'
                 
@@ -158,27 +157,50 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
 - 成本距離(60日乖離): {res_data['position']['cost_distance']}%
 - 系統給出的策略指引: {res_data['position']['strategy_profile']}"""
 
-                # 強固的防呆機制：嘗試 1.5 Pro，若 404 則自動切換 1.0 Pro 備用方案
-                response_text = ""
                 try:
-                    model = genai.GenerativeModel('gemini-1.5-pro')
-                    response = model.generate_content(prompt)
-                    response_text = response.text
-                except Exception as e:
-                    if "404" in str(e) or "not found" in str(e).lower():
-                        try:
-                            # 發生 404 錯誤，啟動備用穩定模型
-                            st.warning("⚠️ 偵測到 Google 1.5 Pro 伺服器命名變更 (404 錯誤)，系統已自動為您切換至穩定版備用模型進行分析。")
-                            fallback_model = genai.GenerativeModel('gemini-pro')
-                            response = fallback_model.generate_content(prompt)
-                            response_text = response.text
-                        except Exception as fallback_e:
-                            st.error(f"❌ 備用模型呼叫失敗: {str(fallback_e)}")
+                    # 💡 動態取得 API Key 支援的所有文本生成模型
+                    available_models = [
+                        m.name.replace('models/', '') 
+                        for m in genai.list_models() 
+                        if 'generateContent' in m.supported_generation_methods
+                    ]
+                    
+                    target_model_name = None
+                    # 優先選用順序：1.5-pro -> 1.5-flash -> pro
+                    for pref in ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro', 'gemini']:
+                        for m in available_models:
+                            if pref in m:
+                                target_model_name = m
+                                break
+                        if target_model_name:
+                            break
+                            
+                    if not target_model_name and available_models:
+                        target_model_name = available_models[0]
+                        
+                    if not target_model_name:
+                        st.error("❌ 您的 API Key 無法存取任何支援內容生成的 Gemini 模型。請確認 API Key 權限。")
                     else:
-                        st.error(f"❌ Gemini AI 發生非預期的連線錯誤: {str(e)}")
-                
-                if response_text:
-                    st.info(response_text)
+                        # 💡 判斷並映射為友善的模型名稱
+                        friendly_name = "Gemini 未知模型"
+                        if "1.5-pro" in target_model_name:
+                            friendly_name = "Gemini 1.5 PRO"
+                        elif "1.5-flash" in target_model_name:
+                            friendly_name = "Gemini 1.5 FLASH"
+                        elif "gemini-pro" == target_model_name:
+                            friendly_name = "Gemini 1.0 PRO"
+                        else:
+                            friendly_name = target_model_name.upper()
+                            
+                        # 在畫面上醒目標示目前使用的 AI 模型
+                        st.success(f"⚡ 目前驅動的 AI 核心：**{friendly_name}** (實際呼叫代號: `{target_model_name}`)")
+                        
+                        model = genai.GenerativeModel(target_model_name)
+                        response = model.generate_content(prompt)
+                        st.info(response.text)
+
+                except Exception as e:
+                    st.error(f"❌ Gemini AI 發生連線錯誤: {str(e)}")
     else:
         pass 
 
