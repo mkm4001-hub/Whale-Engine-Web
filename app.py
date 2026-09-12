@@ -129,7 +129,7 @@ def render_plotly_charts(stock_id):
         st.error(f"❌ 圖表渲染失敗: {str(e)}")
 
 # ==========================================
-# 4. Gemini AI 視覺交叉審查模組 (升級精準參數餵食)
+# 4. Gemini AI 視覺交叉審查模組 (升級強固版)
 # ==========================================
 def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
     if current_key:
@@ -137,46 +137,53 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
         genai.configure(api_key=current_key)
         
         if st.button(f"啟動 {stock_id} AI 分析"):
-            with st.spinner("🧠 巨鯨系統正在將量化特徵融合交由 AI 審查..."):
-                try:
-                    # 修正 404 錯誤，改用 gemini-1.5-pro-latest 或 fallback 至 gemini-pro
-                    try:
-                        model = genai.GenerativeModel('gemini-1.5-pro-latest')
-                    except:
-                        model = genai.GenerativeModel('gemini-pro')
-                    
-                    # 組合提示詞，把系統找出的正負面指標強制餵給 AI
-                    pos_str = chr(10).join(['- ' + p for p in pos_list]) if pos_list else '- 無明顯正面指標'
-                    neg_str = chr(10).join(['- ' + n for n in neg_list]) if neg_list else '- 無明顯負面指標'
-                    
-                    prompt = f"""你是一位擁有20年經驗的台股頂級量化交易專家。
-請根據『巨鯨系統 V25.7 PRO』對台股代號 {stock_id} 萃取出的客觀多空指標，給出專業的進出場策略、籌碼判讀與風險提示。
+            with st.spinner("🧠 巨鯨系統正在將量化特徵融合交由 AI 審查 (請稍候)..."):
+                
+                # 組合提示詞，加入您指定的角色設定與免責聲明要求
+                pos_str = chr(10).join(['- ' + p for p in pos_list]) if pos_list else '- 無明顯正面指標'
+                neg_str = chr(10).join(['- ' + n for n in neg_list]) if neg_list else '- 無明顯負面指標'
+                
+                prompt = f"""你是一個20年經驗的台股資深分析師，請你依照系統判定指標的狀況，與近日K線圖，最新5分K線圖進行比對，確認是否吻合，判斷邏輯為何？並依照目前趨勢，判斷未來可能走勢方向何者為大?為什麼(判斷的部分需加註警語：僅為技術面判斷，不代表真實)
 
-【🟢 系統判定之正面指標 (多方支撐)】
+【巨鯨系統判定指標狀態】
+🟢 正面指標 (多方支撐):
 {pos_str}
 
-【🔴 系統判定之負面/風險指標 (空方壓力)】
+🔴 負面/風險指標 (空方壓力):
 {neg_str}
 
 【綜合量化數據】
 - 目前價位: {res_data['position']['current_price']}
 - 實戰防守價: {res_data['position']['defensive_price']}
 - 成本距離(60日乖離): {res_data['position']['cost_distance']}%
-- 系統給出的策略指引: {res_data['position']['strategy_profile']}
+- 系統給出的策略指引: {res_data['position']['strategy_profile']}"""
 
-請基於以上巨鯨系統的「客觀特徵數據」，切勿瞎猜，進行詳盡的多空推演分析。請使用繁體中文（台灣）。"""
-                    
+                # 強固的防呆機制：嘗試 1.5 Pro，若 404 則自動切換 1.0 Pro 備用方案
+                response_text = ""
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-pro')
                     response = model.generate_content(prompt)
-                    st.info(response.text)
-                    
+                    response_text = response.text
                 except Exception as e:
-                    st.error(f"❌ Gemini AI 呼叫失敗: {str(e)}")
-                    st.caption("💡 提示：若仍出現 404 錯誤，可能為 Google API 端波動，系統已嘗試使用備用模型連線。")
+                    if "404" in str(e) or "not found" in str(e).lower():
+                        try:
+                            # 發生 404 錯誤，啟動備用穩定模型
+                            st.warning("⚠️ 偵測到 Google 1.5 Pro 伺服器命名變更 (404 錯誤)，系統已自動為您切換至穩定版備用模型進行分析。")
+                            fallback_model = genai.GenerativeModel('gemini-pro')
+                            response = fallback_model.generate_content(prompt)
+                            response_text = response.text
+                        except Exception as fallback_e:
+                            st.error(f"❌ 備用模型呼叫失敗: {str(fallback_e)}")
+                    else:
+                        st.error(f"❌ Gemini AI 發生非預期的連線錯誤: {str(e)}")
+                
+                if response_text:
+                    st.info(response_text)
     else:
         pass 
 
 # ==========================================
-# 5. UI 輔助函數 (轉換 Colab 的 O/X 記號)
+# 5. UI 輔助函數 (轉換 O/X 記號)
 # ==========================================
 def format_fish_check(status):
     if status == "Error": return "⚠️ 錯誤"
@@ -287,7 +294,7 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
         
         st.info(f"💡 **系統策略指引**：{p['strategy_profile']} (防守基準: {p['defensive_status_text']})")
 
-        # --- 區塊 2：多空綜合指標看板 (新增) ---
+        # --- 區塊 2：多空綜合指標看板 ---
         st.markdown("---")
         st.subheader("⚖️ 巨鯨多空力道總結 (自動彙整)")
         col_pos, col_neg = st.columns(2)
@@ -359,7 +366,7 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
         st.markdown("---")
         render_plotly_charts(stock_input)
         
-        # 💡 將萃取出的正負面指標，連同計算結果一起傳給 AI
+        # 將萃取出的正負面指標，連同計算結果一起傳給 AI
         gemini_vision_review(stock_input, gemini_key, res, positives, negatives)
         
     else:
