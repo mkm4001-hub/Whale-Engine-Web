@@ -109,7 +109,7 @@ def get_kline_charts_and_images(stock_id, target_code):
 
     return fig_daily, fig_5m, img_daily, img_5m
 
-# 🌟 回傳文字結果與確切模型版本，優先使用 Pro
+# 🌟 回傳文字結果與確切模型版本
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
