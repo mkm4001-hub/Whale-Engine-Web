@@ -115,7 +115,7 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。並幫我分析，最近3日整體的趨勢篇漲或跌的可能性較大，技術方面的判斷邏輯是什麼？
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -180,10 +180,10 @@ def log_query(username, stocks):
         writer.writerow([now, username, stocks])
 
 USERS = {
-    "chiu": {"password": "pwd001!", "role": "superuser"}, 
+    "chiu": {"password": "pwd", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "chi": {"password": "cc2468500", "role": "full"},
-    "abs": {"password": "study01", "role": "full"},
+    "admin1": {"password": "pwd", "role": "full"},
+    "admin2": {"password": "pwd", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -192,7 +192,7 @@ def check_login():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
     if not st.session_state.authenticated:
-        st.title("🔒 巨鯨系統")
+        st.title("🔒 邱專屬看盤系統")
         username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         if st.button("登入"):
@@ -260,7 +260,7 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 巨鯨選股決策中心 V25.7 PRO")
+st.title("🐋 邱神選股決策中心 V25.7 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無須輸入 Token。")
 
 mode_choice = st.radio("選擇資料模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
