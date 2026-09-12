@@ -45,7 +45,7 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# 2. 系統初始化與 API 設定 (改為 TXT 檔上傳)
+# 2. 系統初始化與 API 設定 (TXT 檔上傳)
 # ==========================================
 st.sidebar.header("⚙️ 巨鯨系統設定")
 
@@ -58,7 +58,6 @@ st.sidebar.caption("※ 若未上傳 API Key，系統將不會進行多模態 AI
 
 gemini_key = None
 if gemini_file is not None:
-    # 讀取上傳的 TXT 檔案內容，並去除頭尾空白字元
     gemini_key = gemini_file.getvalue().decode("utf-8").strip()
 else:
     gemini_key = st.secrets.get("GEMINI_API_KEY", None)
@@ -69,7 +68,6 @@ st.sidebar.caption("※ 若未上傳 Token，將自動採用免費版額度 (系
 
 finmind_key = None
 if finmind_file is not None:
-    # 讀取上傳的 TXT 檔案內容，並去除頭尾空白字元
     finmind_key = finmind_file.getvalue().decode("utf-8").strip()
 else:
     finmind_key = st.secrets.get("FINMIND_TOKEN", None)
@@ -137,6 +135,8 @@ def gemini_vision_review(stock_id, current_key):
     if current_key:
         st.subheader("🤖 Gemini AI 深度審查 (巨鯨核心)")
         genai.configure(api_key=current_key)
+        
+        # 這裡的按鈕觸發後，因為外層有 st.session_state 保護，畫面不會再跳掉
         if st.button(f"啟動 {stock_id} AI 分析"):
             with st.spinner("🧠 巨鯨系統正在融合量化數據與圖表型態進行審查..."):
                 try:
@@ -163,103 +163,117 @@ def format_alert_check(status):
     else: return "✅ 安全"
 
 # ==========================================
-# 6. 主程式：深度狙擊模式
+# 6. 主程式：深度狙擊模式 (狀態記憶區塊)
 # ==========================================
 st.title("🎯 巨鯨系統 (Sniper Edition) V25.7 PRO")
 st.markdown("---")
 
-stock_input = st.text_input("🔍 請輸入股票代號 (例如：2330)", "")
+# 初始化記憶區塊 (Session State)
+if 'analysis_result' not in st.session_state:
+    st.session_state['analysis_result'] = None
+if 'analyzed_stock' not in st.session_state:
+    st.session_state['analyzed_stock'] = ""
+
+stock_input = st.text_input("🔍 請輸入股票代號 (例如：2330)", st.session_state['analyzed_stock'])
 
 if st.button("🚀 執行單檔深度體檢") and stock_input:
     with st.spinner(f"巨鯨系統正在對 {stock_input} 進行量化分析 (若無上傳 Token，系統將自動啟動亂數延遲防呆，請稍候)..."):
         res = engine.analyze(stock_input, mode='after_market')
+        # 將運算結果存入記憶體中
+        st.session_state['analysis_result'] = res
+        st.session_state['analyzed_stock'] = stock_input
+
+# 💡 只要記憶體內有結果，而且目前的代號沒有被修改，就把畫面渲染出來
+# 這樣點擊 AI 按鈕時，系統就不會以為您沒有做過分析了！
+if st.session_state['analysis_result'] is not None and st.session_state['analyzed_stock'] == stock_input:
+    res = st.session_state['analysis_result']
+    
+    if "【分析失敗】" not in res.get("position", {}).get("candidate_status", ""):
+        st.success(f"✅ {stock_input} 分析完成！")
         
-        if "【分析失敗】" not in res.get("position", {}).get("candidate_status", ""):
-            st.success(f"✅ {stock_input} 分析完成！")
+        p = res["position"]
+        f = res["fish"]
+        c = res["chip"]
+        r = res["retreat"]
+        w = res["warning"]
+        e = res["endurance"]
+        d = res["defense"]
+        cx = res["chip_xray"]
+        fun = res["fundamental"]
+        dq = res["data_quality"]
+
+        # --- 區塊 1：核心 KPI 面板 ---
+        st.subheader("📌 戰情核心面板")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("健康等級", f["health_grade"])
+        col2.metric("機會分數", p["opportunity_score"])
+        col3.metric("魚頭分數", f["fish_score"])
+        col4.metric("撤退風險", r["risk_status"])
+
+        col5, col6, col7, col8 = st.columns(4)
+        col5.metric("目前價(Raw)", p["current_price"])
+        col6.metric("實戰防守價", f"{p['defensive_price']}")
+        col7.metric("60日加權均價", p["vwap60"])
+        col8.metric("成本距離", f"{p['cost_distance']}%")
+        
+        st.info(f"💡 **系統策略指引**：{p['strategy_profile']} (防守基準: {p['defensive_status_text']})")
+
+        # --- 區塊 2：單機版細部指標展開 ---
+        st.markdown("---")
+        st.subheader("📋 深度量化指標明細")
+        
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🐟 魚頭體檢", "🏃 撤退與預警", "🛡️ 防禦與續航", "🏦 籌碼與集保", "📊 基本資料對齊"])
+        
+        with tab1:
+            st.write("**【技術趨勢與動能】**")
+            st.write(f"趨勢: {f['trend_status']} | 動能: {f['rs_status']} | 籌碼: {f['chip_status']}")
+            st.write("**【詳細檢核表】**")
+            for item, status in f["health_checks"]:
+                st.markdown(f"- **{item}** : {format_fish_check(status)}")
+
+        with tab2:
+            col_r, col_w = st.columns(2)
+            with col_r:
+                st.write(f"**【撤退檢查】(分數: {r['retreat_score']})**")
+                for item, status in r["retreat_checks"]:
+                    st.markdown(f"- **{item}** : {format_alert_check(status)}")
+            with col_w:
+                st.write(f"**【高檔預警】(狀態: {w['warning_status']})**")
+                for item, status in w["warning_checks"]:
+                    st.markdown(f"- **{item}** : {format_alert_check(status)}")
+
+        with tab3:
+            st.write(f"**【續航力狀態】** {e['endurance_status']} (分數: {e['endurance_score']})")
+            for msg in e["endurance_messages"]:
+                st.markdown(f"🔹 {msg}")
+            st.write("---")
+            st.write(f"**【防守雷達狀態】** {d['defense_status']}")
+            if d["defense_signals"]:
+                for sig in d["defense_signals"]:
+                    st.markdown(f"🛡️ {sig}")
+            else:
+                st.markdown("未偵測到特殊防禦行為")
+
+        with tab4:
+            st.write(f"**【法人雷達】** {c['chip_status']} (加分: {c['chip_score']})")
+            for msg in c["chip_messages"]:
+                st.markdown(f"💼 {msg}")
+            st.write("---")
+            st.write(f"**【集保 X 光透視】** {cx['xray_status']}")
+            st.markdown(f"🔎 {cx['xray_message']}")
+
+        with tab5:
+            st.write(f"**【基本面狀態】** {fun['fund_label']}")
+            st.write(f"K線與技術面最新日: {dq.get('latest_price_date', '無')}")
+            st.write(f"法人買賣超最新日: {dq.get('inst_latest_date', '無')}")
+            st.write(f"集保大戶最新日: {dq.get('tdcc_latest_date', '無')}")
             
-            p = res["position"]
-            f = res["fish"]
-            c = res["chip"]
-            r = res["retreat"]
-            w = res["warning"]
-            e = res["endurance"]
-            d = res["defense"]
-            cx = res["chip_xray"]
-            fun = res["fundamental"]
-            dq = res["data_quality"]
-
-            # --- 區塊 1：核心 KPI 面板 ---
-            st.subheader("📌 戰情核心面板")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("健康等級", f["health_grade"])
-            col2.metric("機會分數", p["opportunity_score"])
-            col3.metric("魚頭分數", f["fish_score"])
-            col4.metric("撤退風險", r["risk_status"])
-
-            col5, col6, col7, col8 = st.columns(4)
-            col5.metric("目前價(Raw)", p["current_price"])
-            col6.metric("實戰防守價", f"{p['defensive_price']}")
-            col7.metric("60日加權均價", p["vwap60"])
-            col8.metric("成本距離", f"{p['cost_distance']}%")
-            
-            st.info(f"💡 **系統策略指引**：{p['strategy_profile']} (防守基準: {p['defensive_status_text']})")
-
-            # --- 區塊 2：單機版細部指標展開 ---
-            st.markdown("---")
-            st.subheader("📋 深度量化指標明細")
-            
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["🐟 魚頭體檢", "🏃 撤退與預警", "🛡️ 防禦與續航", "🏦 籌碼與集保", "📊 基本資料對齊"])
-            
-            with tab1:
-                st.write("**【技術趨勢與動能】**")
-                st.write(f"趨勢: {f['trend_status']} | 動能: {f['rs_status']} | 籌碼: {f['chip_status']}")
-                st.write("**【詳細檢核表】**")
-                for item, status in f["health_checks"]:
-                    st.markdown(f"- **{item}** : {format_fish_check(status)}")
-
-            with tab2:
-                col_r, col_w = st.columns(2)
-                with col_r:
-                    st.write(f"**【撤退檢查】(分數: {r['retreat_score']})**")
-                    for item, status in r["retreat_checks"]:
-                        st.markdown(f"- **{item}** : {format_alert_check(status)}")
-                with col_w:
-                    st.write(f"**【高檔預警】(狀態: {w['warning_status']})**")
-                    for item, status in w["warning_checks"]:
-                        st.markdown(f"- **{item}** : {format_alert_check(status)}")
-
-            with tab3:
-                st.write(f"**【續航力狀態】** {e['endurance_status']} (分數: {e['endurance_score']})")
-                for msg in e["endurance_messages"]:
-                    st.markdown(f"🔹 {msg}")
-                st.write("---")
-                st.write(f"**【防守雷達狀態】** {d['defense_status']}")
-                if d["defense_signals"]:
-                    for sig in d["defense_signals"]:
-                        st.markdown(f"🛡️ {sig}")
-                else:
-                    st.markdown("未偵測到特殊防禦行為")
-
-            with tab4:
-                st.write(f"**【法人雷達】** {c['chip_status']} (加分: {c['chip_score']})")
-                for msg in c["chip_messages"]:
-                    st.markdown(f"💼 {msg}")
-                st.write("---")
-                st.write(f"**【集保 X 光透視】** {cx['xray_status']}")
-                st.markdown(f"🔎 {cx['xray_message']}")
-
-            with tab5:
-                st.write(f"**【基本面狀態】** {fun['fund_label']}")
-                st.write(f"K線與技術面最新日: {dq.get('latest_price_date', '無')}")
-                st.write(f"法人買賣超最新日: {dq.get('inst_latest_date', '無')}")
-                st.write(f"集保大戶最新日: {dq.get('tdcc_latest_date', '無')}")
-                
-            # --- 區塊 3：圖表與 AI 審查 ---
-            st.markdown("---")
-            render_plotly_charts(stock_input)
-            gemini_vision_review(stock_input, gemini_key)
-            
-        else:
-            st.error(f"❌ {stock_input} 資料異常或歷史不足，無法完成分析。")
-            if res.get("all_errors"):
-                st.write("底層錯誤細節：", res["all_errors"])
+        # --- 區塊 3：圖表與 AI 審查 ---
+        st.markdown("---")
+        render_plotly_charts(stock_input)
+        gemini_vision_review(stock_input, gemini_key)
+        
+    else:
+        st.error(f"❌ {stock_input} 資料異常或歷史不足，無法完成分析。")
+        if res.get("all_errors"):
+            st.write("底層錯誤細節：", res["all_errors"])
