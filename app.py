@@ -177,8 +177,8 @@ def log_query(username, stocks):
 USERS = {
     "chiu": {"password": "pwd001!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "chiu01": {"password": "cc2468500", "role": "full"},
-    "abs0401": {"password": "study01!", "role": "full"},
+    "admin1": {"password": "pwd", "role": "full"},
+    "admin2": {"password": "pwd", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -255,7 +255,7 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 巨鯨選股決策中心 V25.7 PRO")
+st.title("🐋 巨鯨決策中心 V25.7 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無須輸入 Token。")
 
 mode_choice = st.radio("選擇資料模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
