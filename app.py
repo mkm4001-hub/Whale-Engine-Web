@@ -7,23 +7,23 @@ import google.generativeai as genai
 import time
 import os
 
-# 引入 V25.7 PRO 的後端核心模組
+# 引入巨鯨系統的後端核心模組
 from whale_engines import WhaleEngine, WhaleTools
 
-# 載入我們獨立建立的帳號密碼檔
-try:
-    from auth import ADMIN_CREDENTIALS
-except ImportError:
-    # 預防 auth.py 遺失的防呆
-    ADMIN_CREDENTIALS = {"chiu": "chiu"}
-
 # ==========================================
-# 1. 系統設定與權限管理
+# 1. 系統設定與權限管理 (讀取 auth.py)
 # ==========================================
 st.set_page_config(page_title="巨鯨系統 V25.7 PRO", layout="wide")
 
+# 強化防呆：捕捉 ImportError 或 auth.py 內的語法錯誤
+try:
+    from auth import ADMIN_CREDENTIALS
+except Exception as e:
+    ADMIN_CREDENTIALS = {"chiu": "chiu"}
+    st.sidebar.warning(f"⚠️ 無法正確讀取 auth.py (錯誤: {e})，已暫時啟用預設帳號。")
+
 def check_password():
-    """巨鯨系統權限驗證 (讀取 auth.py)"""
+    """巨鯨系統權限驗證"""
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
@@ -32,7 +32,6 @@ def check_password():
         username = st.text_input("使用者帳號", key="username")
         password = st.text_input("密碼", type="password", key="password")
         if st.button("登入"):
-            # 檢查使用者是否存在，以及密碼是否正確
             if username in ADMIN_CREDENTIALS and password == ADMIN_CREDENTIALS[username]: 
                 st.session_state["password_correct"] = True
                 st.rerun()
@@ -49,16 +48,16 @@ if not check_password():
 # ==========================================
 st.sidebar.header("⚙️ 巨鯨系統設定")
 
-# 1. 填入您的 GitHub 帳號與儲存庫名稱 (格式: 帳號/儲存庫名稱)
-GITHUB_REPO = "mkm4001-hub/請填入您的儲存庫名稱"
+# 1. 直接綁定您的 GitHub 集保資料庫 (自動抓取 CSV)
+GITHUB_REPO = "mkm4001-hub/WhaleEngine-TDCC-Data"
 
 # 2. 讓使用者輸入 Gemini API Key
 gemini_key = st.sidebar.text_input("🔑 Gemini API Key (選項)", type="password")
-st.sidebar.caption("※ 若未輸入 API Key，系統將不會進行多模態 AI 深度分析。")
+st.sidebar.caption("※ 若未輸入 API Key，系統將不會進行 AI 分析。")
 
 # 3. 讓使用者輸入 FinMind Token
 finmind_key = st.sidebar.text_input("🔑 FinMind Token (選項)", type="password")
-st.sidebar.caption("※ 若未輸入 Token，將自動使用免費版額度 (內建亂數防呆避開封鎖)。")
+st.sidebar.caption("※ 若無輸入，則採用免費版額度 (系統會自動啟動亂數模擬人類爬蟲防封鎖)。")
 
 @st.cache_resource
 def init_engine(fm_token):
@@ -156,7 +155,7 @@ st.markdown("---")
 stock_input = st.text_input("🔍 請輸入股票代號 (例如：2330)", "")
 
 if st.button("🚀 執行單檔深度體檢") and stock_input:
-    with st.spinner(f"巨鯨系統正在對 {stock_input} 進行量化分析 (含防封鎖延遲，請稍候)..."):
+    with st.spinner(f"巨鯨系統正在對 {stock_input} 進行量化分析 (若使用免費版 FinMind，系統會自動啟動亂數延遲防呆，請稍候)..."):
         res = engine.analyze(stock_input, mode='after_market')
         
         if "【分析失敗】" not in res.get("position", {}).get("candidate_status", ""):
