@@ -14,7 +14,7 @@ import mplfinance as mpf
 from PIL import Image
 import google.generativeai as genai
 
-# 載入 V25.6 Whale Engines
+# 載入 V25.7 Whale Engines
 from whale_engines import *
 
 # ==========================================
@@ -109,13 +109,13 @@ def get_kline_charts_and_images(stock_id, target_code):
 
     return fig_daily, fig_5m, img_daily, img_5m
 
-# 🌟 回傳文字結果與確切模型版本，優先使用 Pro
+# 🌟 回傳文字結果與確切模型版本
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。並判斷後續主力會短時間讓股價下跌不管或是會護盤，那些可能性較高，邏輯為何？
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -147,12 +147,7 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
         raise Exception("此 API Key 沒有可用的多模態視覺模型權限。")
         
     target_model = available_models[0]
-    for pref in [
-        'models/gemini-1.5-pro-latest', 
-        'models/gemini-1.5-pro', 
-        'models/gemini-1.5-flash-latest', 
-        'models/gemini-1.5-flash'
-    ]:
+    for pref in ['models/gemini-1.5-pro-latest', 'models/gemini-1.5-pro', 'models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash']:
         if pref in available_models:
             target_model = pref
             break
@@ -182,8 +177,8 @@ def log_query(username, stocks):
 USERS = {
     "chiu": {"password": "pwd001!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "chi01": {"password": "cc2468500", "role": "full"},
-    "abs0401": {"password": "study01", "role": "full"},
+    "chiu01": {"password": "cc2468500", "role": "full"},
+    "abs0401": {"password": "study01!", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -260,179 +255,203 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 巨鯨系統 V25.6 PRO")
+st.title("🐋 巨鯨選股決策中心 V25.7 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無須輸入 Token。")
 
-mode_choice = st.radio("選擇模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
-stock_input = st.text_input("請輸入股票代號 (多檔請用空白分隔，例如: 2330 3034)")
+mode_choice = st.radio("選擇資料模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
+
+st.markdown("### 🎯 選擇分析對象")
+# 🌟 V25.7 全自動流水線模式選項
+scan_mode = st.radio("掃描模式", ["手動輸入標的 (狙擊模式)", "全自動雷達掃描 (尋找壓縮突破潛力股)"])
+
+stock_input = ""
+if scan_mode == "手動輸入標的 (狙擊模式)":
+    stock_input = st.text_input("請輸入股票代號 (多檔請用空白分隔，例如: 2330 3034)")
+else:
+    st.info("💡 啟動後，系統將自動從市場掃描流動性佳且均線極度壓縮之標的，並送交總司令深度體檢。")
 
 if st.button("🚀 開始分析"):
-    if not stock_input:
-        st.warning("請輸入至少一檔股票代號！")
-    else:
+    stock_list = []
+    
+    # 決定股票名單
+    if scan_mode == "手動輸入標的 (狙擊模式)":
+        if not stock_input:
+            st.warning("請輸入至少一檔股票代號！")
+            st.stop()
         log_query(st.session_state.user, stock_input)
-        current_mode = 'intraday' if '盤中' in mode_choice else 'after_market'
         stock_list = list(dict.fromkeys([s.strip() for s in stock_input.split() if s.strip()]))
+    else:
+        log_query(st.session_state.user, "啟動全自動雷達掃描")
+        with st.spinner("🚀 啟動前鋒雷達掃描全市場... (防封鎖降速機制運作中，預計耗時 1~2 分鐘，請耐心等候)"):
+            try:
+                dl = DataLoader()
+                scanner = ScannerEngine(dl)
+                stock_list = scanner.run_scan(min_volume_sheets=800, top_n_liquidity=300, max_bandwidth=0.025)
+                if not stock_list:
+                    st.warning("⚠️ 前鋒雷達今日未尋獲符合極端壓縮條件之標的，請明日再試。")
+                    st.stop()
+                st.success(f"🎯 雷達掃描完成！共鎖定 {len(stock_list)} 檔潛力標的，交由總司令體檢：{', '.join(stock_list)}")
+            except Exception as e:
+                st.error(f"雷達掃描發生錯誤: {str(e)}")
+                st.stop()
+
+    current_mode = 'intraday' if '盤中' in mode_choice else 'after_market'
+    st.info("總司令深度體檢運算中，請稍候...")
+    progress_text = "批次掃描進度"
+    my_bar = st.progress(0, text=progress_text)
+    total_stocks = len(stock_list)
+    
+    try:
+        tdcc_cache_dir = os.path.join(os.getcwd(), 'TDCC_Cache')
+        os.makedirs(tdcc_cache_dir, exist_ok=True)
+        tdcc_manager = TDCCCacheManager(tdcc_cache_dir)
         
-        st.info("系統運算中，請稍候...")
-        progress_text = "批次掃描進度"
-        my_bar = st.progress(0, text=progress_text)
-        total_stocks = len(stock_list)
+        dl = DataLoader()
+        data_engine = DataEngine(dataloader=dl, tdcc_manager=tdcc_manager)
         
-        try:
-            tdcc_cache_dir = os.path.join(os.getcwd(), 'TDCC_Cache')
-            os.makedirs(tdcc_cache_dir, exist_ok=True)
-            tdcc_manager = TDCCCacheManager(tdcc_cache_dir)
+        fish_engine = FishScoreEngine()
+        retreat_engine = RetreatScoreEngine()
+        fundamental_engine = FundamentalEngine()
+        position_engine = FishPositionEngine()
+        endurance_engine = WhaleEnduranceEngine()
+        warning_engine = EarlyWarningEngine()
+        defense_engine = SmartMoneyDefenseEngine()
+        chip_engine = ChipRadarEngine()
+        xray_engine = ChipXRayEngine()
+        
+        for idx, stock_id in enumerate(stock_list):
+            st.subheader(f"📊 [{stock_id}] 實戰分析報告 (V25.7)")
             
-            dl = DataLoader()
-            data_engine = DataEngine(dataloader=dl, tdcc_manager=tdcc_manager)
-            
-            fish_engine = FishScoreEngine()
-            retreat_engine = RetreatScoreEngine()
-            fundamental_engine = FundamentalEngine()
-            position_engine = FishPositionEngine()
-            endurance_engine = WhaleEnduranceEngine()
-            warning_engine = EarlyWarningEngine()
-            defense_engine = SmartMoneyDefenseEngine()
-            chip_engine = ChipRadarEngine()
-            xray_engine = ChipXRayEngine()
-            
-            for idx, stock_id in enumerate(stock_list):
-                st.subheader(f"📊 [{stock_id}] 實戰分析報告 (V25.6)")
+            try:
+                df, target_code, data_quality, rev_df, tdcc_df = data_engine.load_stock(stock_id, current_mode)
+                mkt = data_engine.load_market(target_code, data_quality['latest_price_date'])
+                data = data_engine.prepare_indicators(df, mkt)
                 
-                try:
-                    df, target_code, data_quality, rev_df, tdcc_df = data_engine.load_stock(stock_id, current_mode)
-                    mkt = data_engine.load_market(target_code, data_quality['latest_price_date'])
-                    data = data_engine.prepare_indicators(df, mkt)
-                    
-                    data_quality['mkt_latest_date'] = data.get('mkt_latest_date', '無資料')
-                    data['data_quality'] = data_quality
-                    
-                    now = datetime.now(pytz.timezone('Asia/Taipei')).strftime("%Y-%m-%d")
-                    fundamental = fundamental_engine.calculate(rev_df, now)
-                    fish = fish_engine.calculate(data)
-                    retreat = retreat_engine.calculate(data)
-                    warning = warning_engine.calculate(data)
-                    endurance = endurance_engine.calculate(data)
-                    defense = defense_engine.calculate(data, market_data={"df": mkt})
-                    
-                    chip = chip_engine.calculate(data, current_mode)
-                    chip_xray = xray_engine.calculate(tdcc_df, fish["fish_score"], retreat["retreat_score"])
-                    position = position_engine.calculate(data, fish, retreat, warning, endurance, defense, fundamental, chip, chip_xray)
-                    
-                    fig_daily, fig_5m, img_daily, img_5m = get_kline_charts_and_images(stock_id, target_code)
+                data_quality['mkt_latest_date'] = data.get('mkt_latest_date', '無資料')
+                data['data_quality'] = data_quality
+                
+                now = datetime.now(pytz.timezone('Asia/Taipei')).strftime("%Y-%m-%d")
+                fundamental = fundamental_engine.calculate(rev_df, now)
+                fish = fish_engine.calculate(data)
+                retreat = retreat_engine.calculate(data)
+                warning = warning_engine.calculate(data)
+                endurance = endurance_engine.calculate(data)
+                defense = defense_engine.calculate(data, market_data={"df": mkt})
+                
+                chip = chip_engine.calculate(data, current_mode)
+                chip_xray = xray_engine.calculate(tdcc_df, fish["fish_score"], retreat["retreat_score"])
+                position = position_engine.calculate(data, fish, retreat, warning, endurance, defense, fundamental, chip, chip_xray)
+                
+                fig_daily, fig_5m, img_daily, img_5m = get_kline_charts_and_images(stock_id, target_code)
 
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    col1.metric("機會分數", position["opportunity_score"])
-                    col2.metric("魚頭分數", fish["fish_score"])
-                    col3.metric("健康等級", fish["health_grade"])
-                    col4.metric("營收 YoY", f"{fundamental['yoy']}%")
-                    col5.metric("營收 MoM", f"{fundamental['mom']}%")
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("機會分數", position["opportunity_score"])
+                col2.metric("魚頭分數", fish["fish_score"])
+                col3.metric("健康等級", fish["health_grade"])
+                col4.metric("營收 YoY", f"{fundamental['yoy']}%")
+                col5.metric("營收 MoM", f"{fundamental['mom']}%")
+                
+                st.markdown("---")
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown(f"**🎯 大局狀態：** {position['candidate_status']}")
+                    st.markdown(f"**🐟 魚體位置：** {position['fish_position']}")
+                    st.markdown(f"**🛡️ 型態防禦：** {defense['defense_status']}")
+                    st.markdown(f"**🔋 續航狀態：** {endurance['endurance_status']}")
+                with c2:
+                    st.markdown(f"**🏃 綜合撤退風險：** {retreat['risk_status']}")
+                    st.markdown(f"**⚠️ 綜合預警狀態：** {warning['warning_status']}")
+                    st.markdown(f"**🏢 基本面標籤：** {fundamental['fund_label']}")
+                    st.markdown(f"**💡 實戰評估(規則式)：** {position.get('strategy_profile', '無')}")
                     
-                    st.markdown("---")
+                st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
+                
+                if st.session_state.role in ["superuser", "full"]:
+                    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                        "📈 圖表專區 (日K/5分折線)", 
+                        "🤖 GEMINI AI趨勢分析", 
+                        "核心與基本面", 
+                        "防禦與籌碼雷達", 
+                        "體檢與預警明細"
+                    ])
                     
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown(f"**🎯 大局狀態：** {position['candidate_status']}")
-                        st.markdown(f"**🐟 魚體位置：** {position['fish_position']}")
-                        st.markdown(f"**🛡️ 型態防禦：** {defense['defense_status']}")
-                        st.markdown(f"**🔋 續航狀態：** {endurance['endurance_status']}")
-                    with c2:
-                        st.markdown(f"**🏃 綜合撤退風險：** {retreat['risk_status']}")
-                        st.markdown(f"**⚠️ 綜合預警狀態：** {warning['warning_status']}")
-                        st.markdown(f"**🏢 基本面標籤：** {fundamental['fund_label']}")
-                        st.markdown(f"**💡 實戰評估(規則式)：** {position.get('strategy_profile', '無')}")
-                        
-                    st.info(f"**💰 目前價(Raw)：** `{position['current_price']}` ｜ **🛡️ 實戰防守價(ATR)：** `{position['defensive_price']}` ｜ **⚖️ 60日加權均價：** `{position['vwap60']}`")
-                    
-                    if st.session_state.role in ["superuser", "full"]:
-                        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                            "📈 圖表專區 (日K/5分折線)", 
-                            "🤖 GEMINI AI趨勢分析", 
-                            "核心與基本面", 
-                            "防禦與籌碼雷達", 
-                            "體檢與預警明細"
-                        ])
-                        
-                        with tab1:
-                            if fig_daily: 
-                                st.plotly_chart(fig_daily, use_container_width=True)
-                            else: 
-                                st.warning("⚠️ 目前日K線資料不足或訊號不穩定，請稍後再試。")
-                                
-                            if fig_5m: 
-                                st.plotly_chart(fig_5m, use_container_width=True)
-                            else: 
-                                st.warning("⚠️ 尚未有當日 5 分鐘盤中資料，或訊號不穩定連線失敗。")
+                    with tab1:
+                        if fig_daily: 
+                            st.plotly_chart(fig_daily, use_container_width=True)
+                        else: 
+                            st.warning("⚠️ 目前日K線資料不足或訊號不穩定，請稍後再試。")
                             
-                        with tab2:
-                            st.write("### 🤖 GEMINI AI趨勢分析")
-                            if not gemini_api_key:
-                                st.warning("⚠️ 未上傳有效 API Key，系統已自動略過 AI 交叉審查模組，僅執行常規量化程式。")
-                            else:
-                                with st.spinner("Gemini 正在讀取日K與5分折線圖，進行長短線交叉比對中..."):
-                                    system_summary = {
-                                        "candidate_status": position['candidate_status'],
-                                        "fish_position": position['fish_position'],
-                                        "opportunity_score": position['opportunity_score'],
-                                        "fish_score": fish['fish_score'],
-                                        "defensive_price": position['defensive_price'],
-                                        "current_price": position['current_price'],
-                                        "risk_status": f"撤退[{retreat['risk_status']}] | 預警[{warning['warning_status']}]",
-                                        "strategy_profile": position.get('strategy_profile', '')
-                                    }
-                                    try:
-                                        gemini_audit_result, used_model = call_gemini_audit(
-                                            gemini_api_key, stock_id, system_summary, img_daily, img_5m
-                                        )
-                                        st.success(f"🤖 **目前調用 AI 版本**：`{used_model}`")
-                                        st.markdown(gemini_audit_result)
-                                    except Exception as ai_err:
-                                        st.error(f"Gemini 連線或分析失敗: {str(ai_err)}")
-
-                        with tab3:
-                            st.write(f"**保守目標區：** {position.get('target_low', '-')} ~ {position.get('target_high', '-')}")
-                            st.write(f"**剩餘空間：** +{position.get('upside_low', '-')} ~ +{position.get('upside_high', '-')}")
-                            st.markdown("**【系統解讀】**")
-                            st.info(position.get('position_comment', '無'))
-                            
-                        with tab4:
-                            st.write(f"**【籌碼續航力】當前狀態：** {endurance['endurance_status']}")
-                            for msg in endurance.get('endurance_messages', []): st.caption(f"- {msg}")
-                            st.write(f"**【型態防禦雷達】當前狀態：** {defense['defense_status']}")
-                            for sig in defense.get('defense_signals', []): st.caption(f"- {sig}")
-                            st.write(f"**【盤後法人透視】當前狀態：** {chip.get('chip_status', '無資料')}")
-                            for msg in chip.get('chip_messages', []): st.caption(f"- {msg}")
-
-                        with tab5:
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                st.markdown("**【魚頭體檢】** `(正面指標)`")
-                                for item, status in fish["health_checks"]:
-                                    mark = "✅" if status is True else "❌" if status is False else "❓"
-                                    st.caption(f"{mark} {item}")
-                            with col_b:
-                                st.markdown("**【撤退檢查】** `(負面指標)`")
-                                for item, status in retreat["retreat_checks"]:
-                                    mark = "❌" if status is True else "✅" if status is False else "❓"
-                                    st.caption(f"{mark} {item}")
-                                st.markdown("**【高檔預警】** `(負面指標)`")
-                                for item, status in warning["warning_checks"]:
-                                    mark = "❌" if status is True else "✅" if status is False else "❓"
-                                    st.caption(f"{mark} {item}")
-                    else:
-                        st.markdown(f"**系統解讀：** {position.get('position_comment', '無')}")
-                        st.markdown(f"**防守價：** {position['defensive_price']}")
-                        st.markdown(f"**綜合風險狀態：** 撤退 [{retreat['risk_status']}] | 預警 [{warning['warning_status']}]")
+                        if fig_5m: 
+                            st.plotly_chart(fig_5m, use_container_width=True)
+                        else: 
+                            st.warning("⚠️ 尚未有當日 5 分鐘盤中資料，或訊號不穩定連線失敗。")
                         
-                    st.divider()
+                    with tab2:
+                        st.write("### 🤖 GEMINI AI趨勢分析")
+                        if not gemini_api_key:
+                            st.warning("⚠️ 未上傳有效 API Key，系統已自動略過 AI 交叉審查模組，僅執行常規量化程式。")
+                        else:
+                            with st.spinner("Gemini 正在讀取日K與5分折線圖，進行長短線交叉比對中..."):
+                                system_summary = {
+                                    "candidate_status": position['candidate_status'],
+                                    "fish_position": position['fish_position'],
+                                    "opportunity_score": position['opportunity_score'],
+                                    "fish_score": fish['fish_score'],
+                                    "defensive_price": position['defensive_price'],
+                                    "current_price": position['current_price'],
+                                    "risk_status": f"撤退[{retreat['risk_status']}] | 預警[{warning['warning_status']}]",
+                                    "strategy_profile": position.get('strategy_profile', '')
+                                }
+                                try:
+                                    gemini_audit_result, used_model = call_gemini_audit(
+                                        gemini_api_key, stock_id, system_summary, img_daily, img_5m
+                                    )
+                                    st.success(f"🤖 **目前調用 AI 版本**：`{used_model}`")
+                                    st.markdown(gemini_audit_result)
+                                except Exception as ai_err:
+                                    st.error(f"Gemini 連線或分析失敗: {str(ai_err)}")
+
+                    with tab3:
+                        st.write(f"**保守目標區：** {position.get('target_low', '-')} ~ {position.get('target_high', '-')}")
+                        st.write(f"**剩餘空間：** +{position.get('upside_low', '-')} ~ +{position.get('upside_high', '-')}")
+                        st.markdown("**【系統解讀】**")
+                        st.info(position.get('position_comment', '無'))
+                        
+                    with tab4:
+                        st.write(f"**【籌碼續航力】當前狀態：** {endurance['endurance_status']}")
+                        for msg in endurance.get('endurance_messages', []): st.caption(f"- {msg}")
+                        st.write(f"**【型態防禦雷達】當前狀態：** {defense['defense_status']}")
+                        for sig in defense.get('defense_signals', []): st.caption(f"- {sig}")
+                        st.write(f"**【盤後法人透視】當前狀態：** {chip.get('chip_status', '無資料')}")
+                        for msg in chip.get('chip_messages', []): st.caption(f"- {msg}")
+
+                    with tab5:
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.markdown("**【魚頭體檢】** `(正面指標)`")
+                            for item, status in fish["health_checks"]:
+                                mark = "✅" if status is True else "❌" if status is False else "❓"
+                                st.caption(f"{mark} {item}")
+                        with col_b:
+                            st.markdown("**【撤退檢查】** `(負面指標)`")
+                            for item, status in retreat["retreat_checks"]:
+                                mark = "❌" if status is True else "✅" if status is False else "❓"
+                                st.caption(f"{mark} {item}")
+                            st.markdown("**【高檔預警】** `(負面指標)`")
+                            for item, status in warning["warning_checks"]:
+                                mark = "❌" if status is True else "✅" if status is False else "❓"
+                                st.caption(f"{mark} {item}")
+                else:
+                    st.markdown(f"**系統解讀：** {position.get('position_comment', '無')}")
+                    st.markdown(f"**防守價：** {position['defensive_price']}")
+                    st.markdown(f"**綜合風險狀態：** 撤退 [{retreat['risk_status']}] | 預警 [{warning['warning_status']}]")
                     
-                    my_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} (正在處理: {stock_id}...)")
-                    if idx < total_stocks - 1:
-                        time.sleep(random.uniform(1.5, 3.0))
-                        
-                except Exception as e:
-                    st.error(f"分析 {stock_id} 時發生錯誤: {str(e)}")
+                st.divider()
+                
+                my_bar.progress((idx + 1) / total_stocks, text=f"{progress_text} (正在處理: {stock_id}...)")
+                if idx < total_stocks - 1:
+                    time.sleep(random.uniform(1.5, 3.0))
                     
             my_bar.progress(1.0, text="批次掃描完成！")
             st.success("全部分析完成！")
