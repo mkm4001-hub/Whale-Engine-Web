@@ -109,13 +109,13 @@ def get_kline_charts_and_images(stock_id, target_code):
 
     return fig_daily, fig_5m, img_daily, img_5m
 
-# 🌟 回傳文字結果與確切模型版本
+# 🌟 回傳文字結果與確切模型版本，優先使用 Pro
 def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
     genai.configure(api_key=api_key)
     
     prompt = f"""
     你是一位擁有 20 年經驗的台股頂級量化交易專家與資深技術分析操盤手。
-    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。
+    請根據我提供的【Whale Engine 量化診斷報告】以及附加的【近2個月日K圖】、【當日5分鐘折線走勢圖】，嚴格評估系統研判是否與實際圖表走勢吻合。並幫我分析，最近3日整體的趨勢篇漲或跌的可能性較大，技術方面的判斷邏輯是什麼？
 
     【個股代號】：{stock_id}
     【量化系統診斷】：
@@ -147,7 +147,12 @@ def call_gemini_audit(api_key, stock_id, system_info, img_daily, img_5m):
         raise Exception("此 API Key 沒有可用的多模態視覺模型權限。")
         
     target_model = available_models[0]
-    for pref in ['models/gemini-1.5-pro-latest', 'models/gemini-1.5-pro', 'models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash']:
+    for pref in [
+        'models/gemini-1.5-pro-latest', 
+        'models/gemini-1.5-pro', 
+        'models/gemini-1.5-flash-latest', 
+        'models/gemini-1.5-flash'
+    ]:
         if pref in available_models:
             target_model = pref
             break
@@ -177,8 +182,8 @@ def log_query(username, stocks):
 USERS = {
     "chiu": {"password": "pwd001!", "role": "superuser"}, 
     "master": {"password": "pwd", "role": "superuser"},
-    "admin1": {"password": "pwd", "role": "full"},
-    "admin2": {"password": "pwd", "role": "full"},
+    "chi": {"password": "cc2468500", "role": "full"},
+    "abs": {"password": "study01", "role": "full"},
     "user1": {"password": "123", "role": "simple"},
     "user2": {"password": "123", "role": "simple"}
 }
@@ -255,13 +260,12 @@ if st.sidebar.button("登出"):
 # ==========================================
 # 2. 網頁版主介面與執行邏輯
 # ==========================================
-st.title("🐋 巨鯨決策中心 V25.7 PRO")
+st.title("🐋 巨鯨選股決策中心 V25.7 PRO")
 st.info("💡 系統已啟用 FinMind 免費版模式，無須輸入 Token。")
 
 mode_choice = st.radio("選擇資料模式", ["盤後大局透視 (包含集保大戶X光掃描)", "盤中極速模式 (純技術面)"])
 
 st.markdown("### 🎯 選擇分析對象")
-# 🌟 V25.7 全自動流水線模式選項
 scan_mode = st.radio("掃描模式", ["手動輸入標的 (狙擊模式)", "全自動雷達掃描 (尋找壓縮突破潛力股)"])
 
 stock_input = ""
@@ -455,5 +459,5 @@ if st.button("🚀 開始分析"):
                     
             my_bar.progress(1.0, text="批次掃描完成！")
             st.success("全部分析完成！")
-        except Exception as e:
-            st.error(f"系統啟動失敗。錯誤訊息: {str(e)}")
+    except Exception as e:
+        st.error(f"系統啟動失敗。錯誤訊息: {str(e)}")
