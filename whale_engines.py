@@ -1,5 +1,5 @@
 # ==========================================
-# GrandMaster Whale Engine V25.7 PRO (後端核心 - 狙擊專用版)
+# 巨鯨系統 V25.7 PRO (後端核心 - 狙擊專用版)
 # ==========================================
 
 import os
@@ -423,7 +423,7 @@ class DataEngine:
         }
 
 # ==========================================
-# 各大量化分析引擎 (保持完整邏輯以輸出所有指標)
+# 各大量化分析引擎 
 # ==========================================
 class FishScoreEngine:
     def calculate(self, data, custom_params=None):
@@ -467,7 +467,7 @@ class FishScoreEngine:
         elif data["market_status"] == "Bull" and latest["Close"] > latest["MA60"]: rs_score -= 5
         else: rs_score -= 10
 
-        health_checks.append(("RS20 > 0 (動態門檻校準)", rs20 > 0))
+        health_checks.append(("RS20 > 0", rs20 > 0))
         health_checks.append(("RS60 > 0", rs60 > 0))
         score += max(0, rs_score + 20)
 
@@ -486,17 +486,17 @@ class FishScoreEngine:
             bandwidth_now = latest.get("Bandwidth", 1.0)
             if is_stand_above and bandwidth_now < 0.08:
                 score += 10
-                health_checks.append(("均線麻花極度壓縮蓄勢", True))
+                health_checks.append(("均線壓縮蓄勢", True))
             else:
-                health_checks.append(("均線麻花極度壓縮蓄勢", False))
+                health_checks.append(("均線壓縮蓄勢", False))
 
             mean_bandwidth = df["Bandwidth"].shift(1).tail(20).mean()
             prev_bandwidth = df["Bandwidth"].shift(1).iloc[-1]
             is_bb_squeeze = prev_bandwidth <= (mean_bandwidth * 0.85) if mean_bandwidth > 0 else False
             if is_bb_squeeze and latest["Close"] > latest["MA20"]:
                 score += 15
-                health_checks.append(("布林極限壓縮後突破發動", True))
-            else: health_checks.append(("布林極限壓縮後突破發動", False))
+                health_checks.append(("極限壓縮後突破", True))
+            else: health_checks.append(("極限壓縮後突破", False))
         except: has_error = True
 
         volume_score = 0
@@ -518,11 +518,6 @@ class FishScoreEngine:
             health_checks.append(("大盤濾網(震盪)", True))
         else:
             health_checks.append(("大盤濾網(多頭)", False))
-
-        if latest["Close"] * prev_vol20 > 100000000:
-            score += 10
-            health_checks.append(("日均成交額大於1億", True))
-        else: health_checks.append(("日均成交額大於1億", False))
 
         score = min(100, max(0, score))
         grade = "S" if score >= 90 else "A" if score >= 80 else "B" if score >= 70 else "C" if score >= 60 else "D"
@@ -562,7 +557,7 @@ class RetreatScoreEngine:
                     grp1_score += 25
                     retreat_checks.append(("高檔爆量不漲", True))
                 else:
-                    retreat_checks.append(("爆量不漲(底部)", False))
+                    retreat_checks.append(("爆量不漲(底部良性換手)", False))
             else: retreat_checks.append(("爆量不漲", False))
         except: pass
         
@@ -627,7 +622,6 @@ class WhaleEnduranceEngine:
     def calculate(self, data):
         df = data["df"]
         latest = df.iloc[-1]
-        prev = df.iloc[-2]
         score = 50
         messages = []
         try:
@@ -733,7 +727,7 @@ class FishPositionEngine:
         return {
             "candidate_status": "候選 - 大局完整", "fish_position": position, "progress": progress,
             "opportunity_score": round(opportunity_score), "opportunity_level": "****" if opportunity_score >= 60 else "**",
-            "position_comment": "系統穩定執行中", "strategy_profile": strategy, "bias20": round(((current_price_adj - latest["MA20"])/latest["MA20"])*100, 2),
+            "position_comment": "巨鯨系統穩定執行中", "strategy_profile": strategy, "bias20": round(((current_price_adj - latest["MA20"])/latest["MA20"])*100, 2),
             "current_price": round(current_price_raw, 2), "vwap60": round(vwap60_adj * ratio, 2),
             "cost_distance": round(cost_distance, 2), "target_low": WhaleTools.round_tick(target_low_raw, 'floor'), "target_high": WhaleTools.round_tick(target_high_raw, 'ceil'),
             "upside_low": round(upside_low, 1), "upside_high": round(upside_high, 1),
