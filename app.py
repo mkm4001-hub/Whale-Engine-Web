@@ -10,27 +10,34 @@ import os
 # 引入 V25.7 PRO 的後端核心模組
 from whale_engines import WhaleEngine, WhaleTools
 
+# 載入我們獨立建立的帳號密碼檔
+try:
+    from auth import ADMIN_CREDENTIALS
+except ImportError:
+    # 預防 auth.py 遺失的防呆
+    ADMIN_CREDENTIALS = {"chiu": "chiu"}
+
 # ==========================================
 # 1. 系統設定與權限管理
 # ==========================================
-st.set_page_config(page_title="巨鯨決策中心 V25.7 PRO", layout="wide")
+st.set_page_config(page_title="巨鯨系統 V25.7 PRO", layout="wide")
 
 def check_password():
-    """超級管理員權限驗證"""
+    """巨鯨系統權限驗證 (讀取 auth.py)"""
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
     if not st.session_state["password_correct"]:
-        st.title("🔒 巨鯨決策中心 V25.7 PRO")
+        st.title("🔒 巨鯨系統 V25.7 PRO")
         username = st.text_input("使用者帳號", key="username")
         password = st.text_input("密碼", type="password", key="password")
         if st.button("登入"):
-            # 預設超級管理員帳號：chiu
-            if username == "chiu" and password == st.secrets.get("admin_password", "chiu"): 
+            # 檢查使用者是否存在，以及密碼是否正確
+            if username in ADMIN_CREDENTIALS and password == ADMIN_CREDENTIALS[username]: 
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
-                st.error("😕 帳號或密碼錯誤，請確認超級管理員權限。")
+                st.error("😕 帳號或密碼錯誤，請確認權限。")
         return False
     return True
 
@@ -38,28 +45,28 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# 2. 系統初始化 (載入 GitHub 集保與設定金鑰)
+# 2. 系統初始化與 API 設定
 # ==========================================
-st.sidebar.header("⚙️ 系統設定")
+st.sidebar.header("⚙️ 巨鯨系統設定")
 
 # 1. 填入您的 GitHub 帳號與儲存庫名稱 (格式: 帳號/儲存庫名稱)
 GITHUB_REPO = "mkm4001-hub/請填入您的儲存庫名稱"
 
-# 2. 讓使用者輸入或載入 Gemini API Key
-api_key_input = st.sidebar.text_input("🔑 請輸入 Gemini API Key (若已寫在 secrets 則免填)", type="password")
-gemini_key = api_key_input if api_key_input else st.secrets.get("GEMINI_API_KEY", None)
+# 2. 讓使用者輸入 Gemini API Key
+gemini_key = st.sidebar.text_input("🔑 Gemini API Key (選項)", type="password")
+st.sidebar.caption("※ 若未輸入 API Key，系統將不會進行多模態 AI 深度分析。")
 
-# 3. FinMind Token (選填，填入可增加調用額度)
-finmind_token_input = st.sidebar.text_input("🔑 FinMind Token (免費版可不填，自動啟用亂數防護)", type="password")
-finmind_key = finmind_token_input if finmind_token_input else st.secrets.get("FINMIND_TOKEN", None)
+# 3. 讓使用者輸入 FinMind Token
+finmind_key = st.sidebar.text_input("🔑 FinMind Token (選項)", type="password")
+st.sidebar.caption("※ 若未輸入 Token，將自動使用免費版額度 (內建亂數防呆避開封鎖)。")
 
 @st.cache_resource
 def init_engine(fm_token):
-    """初始化並快取 WhaleEngine 總司令部"""
+    """初始化並快取巨鯨系統總司令部"""
     return WhaleEngine(github_repo=GITHUB_REPO, finmind_token=fm_token)
 
-with st.spinner(f"⏳ 初始化系統，載入 GitHub 集保資料庫..."):
-    engine = init_engine(finmind_key)
+with st.spinner(f"⏳ 巨鯨系統初始化，自動掃描 GitHub ({GITHUB_REPO}) 集保庫存..."):
+    engine = init_engine(finmind_key if finmind_key else None)
 
 if st.sidebar.button("🔄 強制重載 GitHub 集保資料"):
     st.cache_resource.clear()
@@ -112,20 +119,20 @@ def render_plotly_charts(stock_id):
 # 4. Gemini AI 視覺交叉審查模組
 # ==========================================
 def gemini_vision_review(stock_id, current_key):
-    st.subheader("🤖 Gemini 1.5 Pro AI 深度審查")
     if current_key:
+        st.subheader("🤖 Gemini AI 深度審查 (巨鯨核心)")
         genai.configure(api_key=current_key)
         if st.button(f"啟動 {stock_id} AI 分析"):
-            with st.spinner("🧠 Gemini 正在融合量化數據與圖表型態進行審查..."):
+            with st.spinner("🧠 巨鯨系統正在融合量化數據與圖表型態進行審查..."):
                 try:
                     model = genai.GenerativeModel('gemini-1.5-pro')
-                    prompt = f"你是一位擁有20年經驗的台股頂級量化交易專家。請根據『邱神選股決策中心 V25.7 PRO』對 {stock_id} 的各項均線（MA5/10/20）與成交量變化，給出專業的進出場策略、型態判讀與風險提示。請使用繁體中文（台灣）。"
+                    prompt = f"你是一位擁有20年經驗的台股頂級量化交易專家。請根據『巨鯨系統 V25.7 PRO』對 {stock_id} 的各項均線（MA5/10/20）與成交量變化，給出專業的進出場策略、型態判讀與風險提示。請使用繁體中文（台灣）。"
                     response = model.generate_content(prompt)
                     st.info(response.text)
                 except Exception as e:
                     st.error(f"❌ Gemini AI 呼叫失敗: {str(e)}")
     else:
-        st.warning("⚠️ 請先於左側輸入 Gemini API Key 以啟用此功能。")
+        pass # 若未輸入 API Key，則隱藏按鈕，完全不進行 AI 分析
 
 # ==========================================
 # 5. UI 輔助函數 (轉換 Colab 的 O/X 記號)
@@ -141,15 +148,15 @@ def format_alert_check(status):
     else: return "✅ 安全"
 
 # ==========================================
-# 6. 主程式：手動狙擊模式
+# 6. 主程式：深度狙擊模式
 # ==========================================
-st.title("🎯 邱神選股決策中心 (Sniper Edition) V25.7 PRO")
+st.title("🎯 巨鯨系統 (Sniper Edition) V25.7 PRO")
 st.markdown("---")
 
 stock_input = st.text_input("🔍 請輸入股票代號 (例如：2330)", "")
 
 if st.button("🚀 執行單檔深度體檢") and stock_input:
-    with st.spinner(f"正在對 {stock_input} 進行 V25.7 PRO 深度量化分析 (含防封鎖延遲，請稍候)..."):
+    with st.spinner(f"巨鯨系統正在對 {stock_input} 進行量化分析 (含防封鎖延遲，請稍候)..."):
         res = engine.analyze(stock_input, mode='after_market')
         
         if "【分析失敗】" not in res.get("position", {}).get("candidate_status", ""):
