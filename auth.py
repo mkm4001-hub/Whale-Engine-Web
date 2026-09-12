@@ -5,6 +5,7 @@
 ADMIN_CREDENTIALS = {
     # 格式為 "您的帳號": "您的密碼"
     # 您可以隨時在這裡修改密碼，或新增多組帳號
-    "chiu": "chiu",
-    "admin": "123456"
+    "chiu": "pwd01!",
+    "chi": "cc2468500"
+    "abs": "study01"
 }
