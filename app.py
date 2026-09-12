@@ -10,20 +10,20 @@ import os
 # 引入巨鯨系統的後端核心模組
 from whale_engines import WhaleEngine, WhaleTools
 
+# 載入我們獨立建立的帳號密碼檔
+try:
+    from auth import ADMIN_CREDENTIALS
+except ImportError:
+    # 預防 auth.py 遺失的防呆
+    ADMIN_CREDENTIALS = {"chiu": "chiu"}
+
 # ==========================================
-# 1. 系統設定與權限管理 (讀取 auth.py)
+# 1. 系統設定與權限管理
 # ==========================================
 st.set_page_config(page_title="巨鯨系統 V25.7 PRO", layout="wide")
 
-# 強化防呆：捕捉 ImportError 或 auth.py 內的語法錯誤
-try:
-    from auth import ADMIN_CREDENTIALS
-except Exception as e:
-    ADMIN_CREDENTIALS = {"chiu": "chiu"}
-    st.sidebar.warning(f"⚠️ 無法正確讀取 auth.py (錯誤: {e})，已暫時啟用預設帳號。")
-
 def check_password():
-    """巨鯨系統權限驗證"""
+    """巨鯨系統權限驗證 (讀取 auth.py)"""
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
@@ -32,6 +32,7 @@ def check_password():
         username = st.text_input("使用者帳號", key="username")
         password = st.text_input("密碼", type="password", key="password")
         if st.button("登入"):
+            # 檢查使用者是否存在，以及密碼是否正確
             if username in ADMIN_CREDENTIALS and password == ADMIN_CREDENTIALS[username]: 
                 st.session_state["password_correct"] = True
                 st.rerun()
@@ -44,20 +45,35 @@ if not check_password():
     st.stop()
 
 # ==========================================
-# 2. 系統初始化與 API 設定
+# 2. 系統初始化與 API 設定 (改為 TXT 檔上傳)
 # ==========================================
 st.sidebar.header("⚙️ 巨鯨系統設定")
 
 # 1. 直接綁定您的 GitHub 集保資料庫 (自動抓取 CSV)
 GITHUB_REPO = "mkm4001-hub/WhaleEngine-TDCC-Data"
 
-# 2. 讓使用者輸入 Gemini API Key
-gemini_key = st.sidebar.text_input("🔑 Gemini API Key (選項)", type="password")
-st.sidebar.caption("※ 若未輸入 API Key，系統將不會進行 AI 分析。")
+# 2. 讓使用者上傳 Gemini API Key (.txt)
+gemini_file = st.sidebar.file_uploader("📁 上傳 Gemini API Key (.txt 檔, 選項)", type=["txt"])
+st.sidebar.caption("※ 若未上傳 API Key，系統將不會進行多模態 AI 深度分析。")
 
-# 3. 讓使用者輸入 FinMind Token
-finmind_key = st.sidebar.text_input("🔑 FinMind Token (選項)", type="password")
-st.sidebar.caption("※ 若無輸入，則採用免費版額度 (系統會自動啟動亂數模擬人類爬蟲防封鎖)。")
+gemini_key = None
+if gemini_file is not None:
+    # 讀取上傳的 TXT 檔案內容，並去除頭尾空白字元
+    gemini_key = gemini_file.getvalue().decode("utf-8").strip()
+else:
+    gemini_key = st.secrets.get("GEMINI_API_KEY", None)
+
+# 3. 讓使用者上傳 FinMind Token (.txt)
+finmind_file = st.sidebar.file_uploader("📁 上傳 FinMind Token (.txt 檔, 選項)", type=["txt"])
+st.sidebar.caption("※ 若未上傳 Token，將自動採用免費版額度 (系統會啟動亂數模擬人類爬蟲防封鎖)。")
+
+finmind_key = None
+if finmind_file is not None:
+    # 讀取上傳的 TXT 檔案內容，並去除頭尾空白字元
+    finmind_key = finmind_file.getvalue().decode("utf-8").strip()
+else:
+    finmind_key = st.secrets.get("FINMIND_TOKEN", None)
+
 
 @st.cache_resource
 def init_engine(fm_token):
@@ -131,7 +147,7 @@ def gemini_vision_review(stock_id, current_key):
                 except Exception as e:
                     st.error(f"❌ Gemini AI 呼叫失敗: {str(e)}")
     else:
-        pass # 若未輸入 API Key，則隱藏按鈕，完全不進行 AI 分析
+        pass # 若未上傳 API Key，則隱藏按鈕，完全不進行 AI 分析
 
 # ==========================================
 # 5. UI 輔助函數 (轉換 Colab 的 O/X 記號)
@@ -155,7 +171,7 @@ st.markdown("---")
 stock_input = st.text_input("🔍 請輸入股票代號 (例如：2330)", "")
 
 if st.button("🚀 執行單檔深度體檢") and stock_input:
-    with st.spinner(f"巨鯨系統正在對 {stock_input} 進行量化分析 (若使用免費版 FinMind，系統會自動啟動亂數延遲防呆，請稍候)..."):
+    with st.spinner(f"巨鯨系統正在對 {stock_input} 進行量化分析 (若無上傳 Token，系統將自動啟動亂數延遲防呆，請稍候)..."):
         res = engine.analyze(stock_input, mode='after_market')
         
         if "【分析失敗】" not in res.get("position", {}).get("candidate_status", ""):
