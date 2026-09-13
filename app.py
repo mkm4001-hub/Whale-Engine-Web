@@ -32,7 +32,6 @@ def check_password():
         username = st.text_input("使用者帳號", key="username")
         password = st.text_input("密碼", type="password", key="password")
         if st.button("登入"):
-            # 檢查使用者是否存在，以及密碼是否正確
             if username in ADMIN_CREDENTIALS and password == ADMIN_CREDENTIALS[username]: 
                 st.session_state["password_correct"] = True
                 st.rerun()
@@ -49,10 +48,9 @@ if not check_password():
 # ==========================================
 st.sidebar.header("⚙️ 巨鯨系統設定")
 
-# 1. 直接綁定您的 GitHub 集保資料庫 (自動抓取 CSV)
+# 直接綁定您的 GitHub 集保資料庫
 GITHUB_REPO = "mkm4001-hub/WhaleEngine-TDCC-Data"
 
-# 2. 讓使用者上傳 Gemini API Key (.txt)
 gemini_file = st.sidebar.file_uploader("📁 上傳 Gemini API Key (.txt 檔, 選項)", type=["txt"])
 st.sidebar.caption("※ 若未上傳 API Key，系統將不會進行多模態 AI 深度分析。")
 
@@ -62,7 +60,6 @@ if gemini_file is not None:
 else:
     gemini_key = st.secrets.get("GEMINI_API_KEY", None)
 
-# 3. 讓使用者上傳 FinMind Token (.txt)
 finmind_file = st.sidebar.file_uploader("📁 上傳 FinMind Token (.txt 檔, 選項)", type=["txt"])
 st.sidebar.caption("※ 若未上傳 Token，將自動採用免費版額度 (系統會啟動亂數模擬人類爬蟲防封鎖)。")
 
@@ -71,7 +68,6 @@ if finmind_file is not None:
     finmind_key = finmind_file.getvalue().decode("utf-8").strip()
 else:
     finmind_key = st.secrets.get("FINMIND_TOKEN", None)
-
 
 @st.cache_resource
 def init_engine(fm_token):
@@ -129,7 +125,7 @@ def render_plotly_charts(stock_id):
         st.error(f"❌ 圖表渲染失敗: {str(e)}")
 
 # ==========================================
-# 4. Gemini AI 視覺交叉審查模組 (動態模型名稱標示)
+# 4. Gemini AI 視覺交叉審查模組 (最新 3.x 世代支援版)
 # ==========================================
 def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
     if current_key:
@@ -142,7 +138,8 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
                 pos_str = chr(10).join(['- ' + p for p in pos_list]) if pos_list else '- 無明顯正面指標'
                 neg_str = chr(10).join(['- ' + n for n in neg_list]) if neg_list else '- 無明顯負面指標'
                 
-                prompt = f"""你是一個20年經驗的台股資深分析師，請你依照系統判定指標的狀況，與近日K線圖，最新5分K線圖進行比對，確認是否吻合，判斷邏輯為何？並依照目前趨勢，判斷未來可能走勢方向何者較高?為什麼(判斷的部分需加註警語：僅為技術面判斷，不代表真實)
+                # 採用您設計的最強分析提示詞
+                prompt = f"""你是一個20年經驗的台股資深分析師，請你依照系統判定指標的狀況，與近日K線圖，最新5分K線圖進行比對，確認是否吻合，判斷邏輯為何？並依照目前趨勢，判斷未來可能走勢方向何者為大?為什麼(判斷的部分需加註警語：僅為技術面判斷，不代表真實)
 
 【巨鯨系統判定指標狀態】
 🟢 正面指標 (多方支撐):
@@ -158,7 +155,7 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
 - 系統給出的策略指引: {res_data['position']['strategy_profile']}"""
 
                 try:
-                    # 💡 動態取得 API Key 支援的所有文本生成模型
+                    # 動態取得 API Key 支援的所有文本生成模型
                     available_models = [
                         m.name.replace('models/', '') 
                         for m in genai.list_models() 
@@ -166,8 +163,14 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
                     ]
                     
                     target_model_name = None
-                    # 優先選用順序：1.5-pro -> 1.5-flash -> pro
-                    for pref in ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro', 'gemini']:
+                    # 🚀 全新優先級設定：將最新的 3.1 Pro 與 3.5 Flash 放第一順位！
+                    priority_list = [
+                        'gemini-3.1-pro', 'gemini-3.5-flash', 'gemini-3', 
+                        'gemini-2.5-pro', 'gemini-2.5',
+                        'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro', 'gemini'
+                    ]
+                    
+                    for pref in priority_list:
                         for m in available_models:
                             if pref in m:
                                 target_model_name = m
@@ -181,23 +184,30 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
                     if not target_model_name:
                         st.error("❌ 您的 API Key 無法存取任何支援內容生成的 Gemini 模型。請確認 API Key 權限。")
                     else:
-                        # 💡 判斷並映射為友善的模型名稱
-                        friendly_name = "Gemini 未知模型"
-                        if "1.5-pro" in target_model_name:
-                            friendly_name = "Gemini 1.5 PRO"
+                        # 💡 判斷並映射為友善的說明名稱 (全面涵蓋最新系列)
+                        friendly_name = "Gemini 世代模型"
+                        if "3.1-pro" in target_model_name:
+                            friendly_name = "Gemini 3.1 PRO (最新旗艦高階模型)"
+                        elif "3.5-flash" in target_model_name:
+                            friendly_name = "Gemini 3.5 FLASH (最新極速多模態模型)"
+                        elif "3" in target_model_name:
+                            friendly_name = "Gemini 3 系列最新版"
+                        elif "2.5" in target_model_name:
+                            friendly_name = "Gemini 2.5 系列"
+                        elif "1.5-pro" in target_model_name:
+                            friendly_name = "Gemini 1.5 PRO (前代旗艦)"
                         elif "1.5-flash" in target_model_name:
-                            friendly_name = "Gemini 1.5 FLASH"
-                        elif "gemini-pro" == target_model_name:
-                            friendly_name = "Gemini 1.0 PRO"
-                        else:
-                            friendly_name = target_model_name.upper()
+                            friendly_name = "Gemini 1.5 FLASH (前代極速)"
+                        elif "gemini-pro" in target_model_name:
+                            friendly_name = "Gemini 1.0 PRO (基礎穩定版)"
                             
-                        # 在畫面上醒目標示目前使用的 AI 模型
-                        st.success(f"⚡ 目前驅動的 AI 核心：**{friendly_name}** (實際呼叫代號: `{target_model_name}`)")
+                        # 在畫面上明確標示系統當下抓到的底層代號
+                        st.success(f"⚡ 目前驅動的 AI 大腦：**{friendly_name}**")
+                        st.caption(f"🔍 系統底層實際呼叫代號：`{target_model_name}` (自動匹配當前金鑰最高權限)")
                         
                         model = genai.GenerativeModel(target_model_name)
                         response = model.generate_content(prompt)
-                        st.info(response.text)
+                        st.markdown(response.text)
 
                 except Exception as e:
                     st.error(f"❌ Gemini AI 發生連線錯誤: {str(e)}")
@@ -223,7 +233,6 @@ def format_alert_check(status):
 st.title("🎯 巨鯨系統 (Sniper Edition) V25.7 PRO")
 st.markdown("---")
 
-# 初始化記憶區塊 (Session State)
 if 'analysis_result' not in st.session_state:
     st.session_state['analysis_result'] = None
 if 'analyzed_stock' not in st.session_state:
@@ -256,33 +265,28 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
         dq = res["data_quality"]
 
         # ==========================================
-        # 💡 多空指標自動萃取邏輯 (餵給 UI 與 AI)
+        # 💡 多空指標自動萃取邏輯
         # ==========================================
         positives = []
         negatives = []
         
-        # 1. 魚頭體檢 (True為正向)
         for item, status in f["health_checks"]:
             if status is True: positives.append(f"【技術】{item}")
             
-        # 2. 撤退與預警 (True為負向風險)
         for item, status in r["retreat_checks"]:
             if status is True: negatives.append(f"【撤退】{item}")
         for item, status in w["warning_checks"]:
             if status is True: negatives.append(f"【預警】{item}")
             
-        # 3. 防守訊號 (皆為正向)
         for sig in d["defense_signals"]:
             positives.append(f"【防禦】{sig}")
             
-        # 4. 續航力 (依關鍵字自動分類)
         for msg in e["endurance_messages"]:
             if any(k in msg for k in ["強勢", "買", "壓縮爆發", "大單"]):
                 positives.append(f"【動能】{msg}")
             elif any(k in msg for k in ["弱勢", "賣", "衰退", "耗盡"]):
                 negatives.append(f"【動能】{msg}")
                 
-        # 5. 法人與集保
         for msg in c["chip_messages"]:
             if any(k in msg for k in ["買", "點火", "認養", "進駐"]):
                 positives.append(f"【法人】{msg}")
@@ -294,13 +298,11 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
         elif "派發" in cx.get("xray_status", "") or "逃頂" in cx.get("xray_status", ""):
             negatives.append(f"【集保】{cx.get('xray_message', '')}")
             
-        # 6. 基本面營收
         if fun.get("is_dual_growth", False):
             positives.append(f"【營收】{fun.get('fund_label', '')}")
         elif fun.get("yoy", 0) < 0 or fun.get("mom", 0) < 0:
             negatives.append(f"【營收】{fun.get('fund_label', '')}")
 
-        # --- 區塊 1：核心 KPI 面板 ---
         st.subheader("📌 戰情核心面板")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("健康等級", f["health_grade"])
@@ -316,7 +318,6 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
         
         st.info(f"💡 **系統策略指引**：{p['strategy_profile']} (防守基準: {p['defensive_status_text']})")
 
-        # --- 區塊 2：多空綜合指標看板 ---
         st.markdown("---")
         st.subheader("⚖️ 巨鯨多空力道總結 (自動彙整)")
         col_pos, col_neg = st.columns(2)
@@ -334,7 +335,6 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
             else:
                 st.write("- 目前無明顯空方特徵")
 
-        # --- 區塊 3：單機版細部指標展開 ---
         st.markdown("---")
         st.subheader("📋 深度量化指標明細")
         
@@ -384,11 +384,8 @@ if st.session_state['analysis_result'] is not None and st.session_state['analyze
             st.write(f"法人買賣超最新日: {dq.get('inst_latest_date', '無')}")
             st.write(f"集保大戶最新日: {dq.get('tdcc_latest_date', '無')}")
             
-        # --- 區塊 4：圖表與 AI 審查 ---
         st.markdown("---")
         render_plotly_charts(stock_input)
-        
-        # 將萃取出的正負面指標，連同計算結果一起傳給 AI
         gemini_vision_review(stock_input, gemini_key, res, positives, negatives)
         
     else:
