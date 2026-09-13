@@ -142,7 +142,7 @@ def gemini_vision_review(stock_id, current_key, res_data, pos_list, neg_list):
                 pos_str = chr(10).join(['- ' + p for p in pos_list]) if pos_list else '- 無明顯正面指標'
                 neg_str = chr(10).join(['- ' + n for n in neg_list]) if neg_list else '- 無明顯負面指標'
                 
-                prompt = f"""你是一個20年經驗的台股資深分析師，請你依照系統判定指標的狀況，與近日K線圖，最新5分K線圖進行比對，確認是否吻合，判斷邏輯為何？並依照目前趨勢，判斷未來可能走勢方向何者為大?為什麼(判斷的部分需加註警語：僅為技術面判斷，不代表真實)
+                prompt = f"""你是一個20年經驗的台股資深分析師，請你依照系統判定指標的狀況，與近日K線圖，最新5分K線圖進行比對，確認是否吻合，判斷邏輯為何？並依照目前趨勢，判斷未來可能走勢方向何者較高?為什麼(判斷的部分需加註警語：僅為技術面判斷，不代表真實)
 
 【巨鯨系統判定指標狀態】
 🟢 正面指標 (多方支撐):
